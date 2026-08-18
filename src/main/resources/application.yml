@@ -1,0 +1,58 @@
+spring:
+  application:
+    name: accountability-bot
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/accountability}
+    username: ${DB_USER:accountability}
+    password: ${DB_PASSWORD:}
+    hikari:
+      # A single-user bot with one poller thread and one tick thread. The
+      # default pool of 10 would reserve far more Postgres backends than this
+      # workload ever uses, and each backend costs memory on a 4 GB box.
+      maximum-pool-size: 5
+      minimum-idle: 1
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  threads:
+    virtual:
+      enabled: true
+
+server:
+  port: ${SERVER_PORT:8080}
+  tomcat:
+    threads:
+      max: 10
+      min-spare: 2
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+  health:
+    diskspace:
+      # 5400 rpm HDD with 425 GB free; the default 10 MB threshold is fine but
+      # the check itself does a stat on every scrape, so keep it cheap.
+      enabled: true
+
+bot:
+  token: ${TELEGRAM_BOT_TOKEN:}
+  owner-chat-id: ${TELEGRAM_OWNER_CHAT_ID:0}
+  poll-timeout: 50
+  tick-interval-ms: 60000
+  tick-initial-delay-ms: 15000
+  backfill-days: 2
+  claim-retry-after-seconds: 120
+  claim-abandon-after-minutes: 60
+
+logging:
+  level:
+    root: INFO
+    dev.era.accountability: INFO
+    # Hikari logs the full JDBC URL at DEBUG; keep it quiet so credentials
+    # never reach journald.
+    com.zaxxer.hikari: INFO

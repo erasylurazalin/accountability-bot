@@ -1,0 +1,84 @@
+# Deployed on era-server. Memory limits on everything
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: accountability-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-accountability}
+      POSTGRES_USER: ${POSTGRES_USER:-accountability}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      # Slow spinning disk: let the OS page cache do the work rather than
+      # duplicating it in shared_buffers.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    command:
+      - postgres
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - max_connections=20
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - effective_cache_size=512MB
+      # 5400 rpm: random reads are genuinely expensive, so tell the planner so.
+      - -c
+      - random_page_cost=4.0
+      - -c
+      - synchronous_commit=off
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-accountability} -d ${POSTGRES_DB:-accountability}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  bot:
+    image: accountability-bot:${IMAGE_TAG:-latest}
+    container_name: accountability-bot
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-accountability}
+      DB_USER: ${POSTGRES_USER:-accountability}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN must be set}
+      TELEGRAM_OWNER_CHAT_ID: ${TELEGRAM_OWNER_CHAT_ID:?TELEGRAM_OWNER_CHAT_ID must be set}
+    # Bound to loopback: the bot dials out to Telegram and needs no ingress.
+    # This port is only for health checks and, later, metrics scraping.
+    ports:
+      - "127.0.0.1:8081:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health | grep -q UP"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  db-data:

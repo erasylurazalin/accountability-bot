@@ -1,0 +1,42 @@
+README.md
+NOTES.md
+# Gradle. The wrapper itself (gradlew, gradle/wrapper/) is committed on purpose,
+# so nothing here may match gradle-wrapper.jar.
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Java build output
+bin/
+out/
+*.class
+*.hprof
+
+# Secrets. .env holds the bot token and the database password; .env.example is
+# the tracked template.
+.env
+.env.*
+!.env.example
+
+# Local compose overrides
+compose.override.yaml
+compose.override.yml
+docker-compose.override.yml
+
+# Logs and dumps
+*.log
+*.sql.gz
+
+# Editors
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+
+# OS
+.DS_Store
+Thumbs.db
