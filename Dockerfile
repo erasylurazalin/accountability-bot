@@ -64,4 +64,8 @@ ENV JAVA_TOOL_OPTIONS="\
 -Djava.security.egd=file:/dev/urandom \
 -Duser.timezone=Asia/Almaty"
 
-ENTRYPOINT ["java", "org.springframework.boot.loader.launch.JarLauncher"]
+# Boot 3.3+ `jarmode=tools extract --layers` produces a restructured jar: a thin
+# app.jar plus lib/, wired by the manifest Class-Path. That is launched with
+# `java -jar`. JarLauncher belongs to the older `jarmode=layertools` layout and
+# is not present in this image.
+ENTRYPOINT ["java", "-jar", "app.jar"]
