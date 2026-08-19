@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Long-poll loop on a dedicated thread. Telegram holds the connection open, so
- * the bot dials out and nothing has to be exposed inbound — which is what makes
+ * the bot dials out and nothing has to be exposed inbound: which is what makes
  * hosting behind the flat's double NAT possible at all (NOTES.md section 2).
  */
 @Component

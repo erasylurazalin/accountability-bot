@@ -37,7 +37,7 @@ RUN java -Djarmode=tools -jar app.jar extract --layers --destination out \
  && ls /layers
 
 # ---------------------------------------------------------------------------
-# Runtime. era-server never sees a JDK, Gradle, or a Maven cache — the JRE and
+# Runtime. era-server never sees a JDK, Gradle, or a Maven cache: the JRE and
 # the application both live in here.
 # ---------------------------------------------------------------------------
 FROM eclipse-temurin:21-jre-alpine

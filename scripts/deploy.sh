@@ -43,7 +43,7 @@ pick_host() {
 }
 
 if ! HOST="$(pick_host)"; then
-    log "era-arch is down — sending Wake-on-LAN burst"
+    log "era-arch is down, sending Wake-on-LAN burst"
     /usr/local/bin/wake-pc --wait
     WE_WOKE_IT=1
     # SSH is not up the instant the network is.
@@ -67,7 +67,7 @@ if [[ "$DO_BUILD" == 1 ]]; then
 
     # --- stream the image across the LAN, no registry involved -------------
     # Both boxes are on the same physical segment, so this runs at wire speed
-    # and never touches the internet — which also avoids the degraded
+    # and never touches the internet, which also avoids the degraded
     # Cloudflare path that fronts Docker Hub (NOTES.md section 0.8).
     log "transferring image"
     ssh "$HOST" "docker save '$IMAGE:$TAG' '$IMAGE:latest'" | docker load
@@ -79,7 +79,7 @@ mkdir -p "$DEPLOY_DIR"
 cp "$SRC_DIR/compose.yaml" "$DEPLOY_DIR/compose.yaml"
 
 if [[ ! -f "$DEPLOY_DIR/.env" ]]; then
-    echo "missing $DEPLOY_DIR/.env — copy .env.example and fill it in" >&2
+    echo "missing $DEPLOY_DIR/.env, copy .env.example and fill it in" >&2
     exit 1
 fi
 
@@ -91,7 +91,7 @@ docker compose --project-directory "$DEPLOY_DIR" up -d
 log "waiting for health"
 for _ in $(seq 1 30); do
     state="$(docker inspect -f '{{.State.Health.Status}}' accountability-bot 2>/dev/null || echo starting)"
-    [[ "$state" == "healthy" ]] && { log "healthy — deployed $IMAGE:$TAG"; break; }
+    [[ "$state" == "healthy" ]] && { log "healthy, deployed $IMAGE:$TAG"; break; }
     sleep 5
 done
 
@@ -102,5 +102,5 @@ if [[ "$SLEEP_ARCH" == 1 && "$WE_WOKE_IT" == 1 ]]; then
     log "shutting era-arch back down (we woke it)"
     ssh "$HOST" "sudo systemctl poweroff" || true
 elif [[ "$SLEEP_ARCH" == 1 ]]; then
-    log "leaving era-arch up — it was already on before this run"
+    log "leaving era-arch up, it was already on before this run"
 fi

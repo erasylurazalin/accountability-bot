@@ -11,7 +11,7 @@ import java.time.Duration;
 public class RestClientConfig {
 
     /**
-     * Plain JDK HttpURLConnection factory — no extra HTTP client dependency.
+     * Plain JDK HttpURLConnection factory: no extra HTTP client dependency.
      * Load here is one long-poll connection plus occasional sends.
      *
      * The read timeout must exceed the long-poll timeout, otherwise every

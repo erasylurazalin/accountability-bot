@@ -1,4 +1,4 @@
-# ADR 0001 — A single tick job, not per-commitment timers
+# ADR 0001: a single tick job, not per-commitment timers
 
 Status: accepted (phase 1)
 Date: 2026-08-19
@@ -41,7 +41,7 @@ constraint on `reminder_event.idempotency_key` rejects the duplicate.
 **Claim before send, not after.** The row is inserted to claim the slot, then
 Telegram is called, then `sent_at` is filled in. A crash in between leaves a
 claim with a null `sent_at`, which the reaper retries after two minutes and
-abandons after an hour. The alternative ordering — send, then record — can
+abandons after an hour. The alternative ordering (send, then record) can
 double-send, which for a reminder bot is the worse failure: a reminder that
 arrives twice trains you to ignore it.
 
@@ -57,5 +57,5 @@ is bounded so a week-long outage cannot manufacture a week of fake misses.
 
 Phase 2 replaces the fixed interval with the non-homogeneous Poisson sampler
 (`NOTES.md` §4). The sampled fire time has to be persisted for the same key to
-survive a restart, so the slot derivation changes — but the claim-then-send
+survive a restart, so the slot derivation changes, but the claim-then-send
 ordering and the unique constraint do not.

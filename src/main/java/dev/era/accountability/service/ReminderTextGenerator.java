@@ -9,7 +9,7 @@ import java.util.List;
  * hosted OpenAI-compatible API or from a local model, and switching between them
  * must be a configuration change rather than a rewrite.
  *
- * Implementations are called by the nightly batch only — never on the send path.
+ * Implementations are called by the nightly batch only: never on the send path.
  * A generator that throws or returns nothing is not an error: the consumer falls
  * back to static templates and the reminder still fires (NOTES.md section 5.1).
  */

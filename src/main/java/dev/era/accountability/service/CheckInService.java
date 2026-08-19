@@ -2,6 +2,7 @@ package dev.era.accountability.service;
 
 import dev.era.accountability.domain.CheckIn;
 import dev.era.accountability.domain.Commitment;
+import dev.era.accountability.domain.UserSettings;
 import dev.era.accountability.repo.AuditRepository;
 import dev.era.accountability.repo.CheckInRepository;
 import dev.era.accountability.repo.StreakRepository;
@@ -13,7 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.ZonedDateTime;
+import java.time.ZoneId;
 import java.util.Optional;
 
 @Service
@@ -31,16 +32,18 @@ public class CheckInService {
         this.audit = audit;
     }
 
-    /** Absolute bounds of the due window for a commitment on a given local date. */
-    public static Instant[] windowFor(Commitment c, LocalDate localDate) {
-        var zone = c.zone();
-        ZonedDateTime start = localDate.atTime(c.windowStart()).atZone(zone);
-        ZonedDateTime end = localDate.atTime(c.windowEnd()).atZone(zone);
-        // A window whose end is not after its start is read as crossing midnight.
-        if (!end.isAfter(start)) {
-            end = end.plusDays(1);
-        }
-        return new Instant[]{start.toInstant(), end.toInstant()};
+    /**
+     * When a day's commitment stops being possible: midnight at the start of the
+     * next local day, exclusive.
+     *
+     * atStartOfDay is used rather than atTime(23,59) because midnight is the one
+     * local time that always exists. A daylight-saving spring-forward deletes an
+     * hour of local time, and any fixed time inside the deleted hour has to be
+     * resolved by a rule; midnight has never been inside one for any zone in the
+     * tz database. It also avoids a dead second between 23:59:59 and 00:00:00.
+     */
+    public static Instant dueAtFor(LocalDate localDate, ZoneId zone) {
+        return localDate.plusDays(1).atStartOfDay(zone).toInstant();
     }
 
     /**
@@ -48,23 +51,33 @@ public class CheckInService {
      *
      * Backfilling is this project's answer to the missed-window question in
      * NOTES.md section 9. If the box was down for a day, that day still gets a
-     * row, which the expiry pass immediately marks EXPIRED — so an outage shows
+     * row, which the expiry pass immediately marks EXPIRED: so an outage shows
      * up in the history as a real miss rather than as a silent gap. The backfill
-     * is bounded so a long outage cannot manufacture weeks of fake misses.
+     * is bounded so a long outage cannot manufacture weeks of fake misses,
+     * and floored at the commitment's creation date so a new commitment is
+     * not born already in arrears.
      */
     @Transactional
-    public void materialiseWindows(Commitment c, Instant now, int backfillDays) {
-        LocalDate today = now.atZone(c.zone()).toLocalDate();
+    public void materialiseDays(Commitment c, UserSettings settings, Instant now, int backfillDays) {
+        var zone = settings.zone();
+        LocalDate today = now.atZone(zone).toLocalDate();
+        // The backfill exists to turn an outage into recorded misses, but it
+        // cannot tell an outage from a commitment that simply did not exist
+        // yet. Without this floor every new commitment is born owing
+        // backfillDays worth of failures it had no chance to meet.
+        LocalDate firstDay = c.createdAt().atZone(zone).toLocalDate();
         for (int i = backfillDays; i >= 0; i--) {
             LocalDate day = today.minusDays(i);
-            var bounds = windowFor(c, day);
-            checkIns.ensureWindow(c.id(), day, bounds[0], bounds[1]);
+            if (day.isBefore(firstDay)) {
+                continue;
+            }
+            checkIns.ensureDay(c.id(), day, dueAtFor(day, zone));
         }
     }
 
     /**
      * An untouched window that has closed is a miss. Marking it EXPIRED rather
-     * than deleting it is deliberate — the adherence history is the product.
+     * than deleting it is deliberate: the adherence history is the product.
      */
     @Transactional
     public int expireClosedWindows(Instant now) {
@@ -77,7 +90,7 @@ public class CheckInService {
             }
         }
         if (expired > 0) {
-            log.info("expired {} closed check-in window(s)", expired);
+            log.info("expired {} closed check-in day(s)", expired);
         }
         return expired;
     }
@@ -101,7 +114,7 @@ public class CheckInService {
 
     /**
      * Skipping requires a written excuse. That is the friction mechanism from
-     * NOTES.md section 3 — it is not validation for its own sake, it is the
+     * NOTES.md section 3: it is not validation for its own sake, it is the
      * whole point of the SKIPPED path, and the database enforces it too.
      */
     @Transactional
@@ -123,11 +136,17 @@ public class CheckInService {
                 .formatted(c.name(), excuse.strip()));
     }
 
-    /** 0 early in the window, 1 past halfway, 2 in the final quarter. */
-    public static int urgencyTier(CheckIn ci, Instant now) {
-        long total = Duration.between(ci.dueWindowStart(), ci.dueWindowEnd()).toMinutes();
+    /**
+     * How pointed the reminder copy should be: 0 with most of the day left,
+     * 1 past halfway, 2 in the final quarter. Derived from time remaining rather
+     * than from a reminder count, so a day with one late reminder still gets the
+     * urgent wording.
+     */
+    public static int urgencyTier(CheckIn ci, Instant now, ZoneId zone) {
+        Instant dayStart = ci.localDate().atStartOfDay(zone).toInstant();
+        long total = Duration.between(dayStart, ci.dueAt()).toMinutes();
         if (total <= 0) return 2;
-        long elapsed = Duration.between(ci.dueWindowStart(), now).toMinutes();
+        long elapsed = Duration.between(dayStart, now).toMinutes();
         double fraction = (double) elapsed / total;
         if (fraction >= 0.75) return 2;
         if (fraction >= 0.5) return 1;

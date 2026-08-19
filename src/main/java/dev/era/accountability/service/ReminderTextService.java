@@ -19,7 +19,7 @@ public class ReminderTextService {
 
     /**
      * Pre-generated line if the batch left one, static template otherwise.
-     * Never calls out to a model — NOTES.md section 5.1 rejects doing that on
+     * Never calls out to a model: NOTES.md section 5.1 rejects doing that on
      * the send path, since it makes the reminder depend on a third party being
      * up at exactly the moment it matters.
      */

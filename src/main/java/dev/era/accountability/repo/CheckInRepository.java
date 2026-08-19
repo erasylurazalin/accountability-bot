@@ -26,28 +26,26 @@ public class CheckInRepository {
                 rs.getLong("id"),
                 rs.getLong("commitment_id"),
                 rs.getObject("local_date", LocalDate.class),
-                rs.getTimestamp("due_window_start").toInstant(),
-                rs.getTimestamp("due_window_end").toInstant(),
+                rs.getTimestamp("due_at").toInstant(),
                 rs.getString("status"),
                 completed == null ? null : completed.toInstant(),
                 rs.getString("excuse_text"));
     }
 
     /**
-     * Materialises the window for a day. ON CONFLICT DO NOTHING makes this safe
-     * to call from every tick and across restarts — the unique constraint on
-     * (commitment_id, local_date) is the actual guarantee.
+     * Materialises the check-in for a day. ON CONFLICT DO NOTHING makes this
+     * safe to call from every tick and across restarts: the unique constraint
+     * on (commitment_id, local_date) is the actual guarantee.
      */
-    public void ensureWindow(long commitmentId, LocalDate localDate, Instant start, Instant end) {
+    public void ensureDay(long commitmentId, LocalDate localDate, Instant dueAt) {
         jdbc.sql("""
-                        INSERT INTO check_in (commitment_id, local_date, due_window_start, due_window_end)
-                        VALUES (:commitmentId, :localDate, :start, :end)
+                        INSERT INTO check_in (commitment_id, local_date, due_at)
+                        VALUES (:commitmentId, :localDate, :dueAt)
                         ON CONFLICT (commitment_id, local_date) DO NOTHING
                         """)
                 .param("commitmentId", commitmentId)
                 .param("localDate", localDate)
-                .param("start", java.sql.Timestamp.from(start))
-                .param("end", java.sql.Timestamp.from(end))
+                .param("dueAt", java.sql.Timestamp.from(dueAt))
                 .update();
     }
 
@@ -55,7 +53,7 @@ public class CheckInRepository {
         return jdbc.sql("""
                         SELECT * FROM check_in
                         WHERE commitment_id = :commitmentId AND status = 'PENDING'
-                        ORDER BY due_window_start
+                        ORDER BY due_at
                         LIMIT 1
                         """)
                 .param("commitmentId", commitmentId)
@@ -63,20 +61,16 @@ public class CheckInRepository {
                 .optional();
     }
 
-    public List<CheckIn> findPendingInWindow(Instant now) {
-        return jdbc.sql("""
-                        SELECT * FROM check_in
-                        WHERE status = 'PENDING'
-                          AND due_window_start <= :now
-                          AND due_window_end > :now
-                        """)
+    /** Days that are still open: not settled, and the deadline has not passed. */
+    public List<CheckIn> findOpenAt(Instant now) {
+        return jdbc.sql("SELECT * FROM check_in WHERE status = 'PENDING' AND due_at > :now")
                 .param("now", java.sql.Timestamp.from(now))
                 .query(CheckInRepository::map)
                 .list();
     }
 
     public List<CheckIn> findExpirable(Instant now) {
-        return jdbc.sql("SELECT * FROM check_in WHERE status = 'PENDING' AND due_window_end <= :now")
+        return jdbc.sql("SELECT * FROM check_in WHERE status = 'PENDING' AND due_at <= :now")
                 .param("now", java.sql.Timestamp.from(now))
                 .query(CheckInRepository::map)
                 .list();

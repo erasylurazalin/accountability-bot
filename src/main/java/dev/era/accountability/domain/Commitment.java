@@ -1,37 +1,25 @@
 package dev.era.accountability.domain;
 
-import java.time.LocalTime;
-import java.time.ZoneId;
+import java.time.Instant;
 
+/**
+ * A thing you have committed to. Deliberately thin: timezone and quiet hours
+ * belong to the person and live in {@link UserSettings}, and nothing here
+ * encodes reminder cadence, because cadence is sampled rather than configured
+ * (NOTES.md section 4).
+ */
 public record Commitment(
         long id,
         long chatId,
         String name,
         String type,
         boolean active,
-        String timezone,
-        LocalTime windowStart,
-        LocalTime windowEnd,
-        LocalTime quietHoursStart,
-        LocalTime quietHoursEnd,
-        int reminderIntervalMinutes,
-        int maxRemindersPerDay
+        Instant createdAt
 ) {
-    public ZoneId zone() {
-        return ZoneId.of(timezone);
-    }
+    public static final String HABIT    = "HABIT";
+    public static final String DEADLINE = "DEADLINE";
 
-    /**
-     * Quiet hours normally wrap midnight (23:00 to 08:00), so the comparison
-     * flips depending on whether start is before or after end.
-     */
-    public boolean isQuiet(LocalTime localTime) {
-        if (quietHoursStart.equals(quietHoursEnd)) {
-            return false;
-        }
-        if (quietHoursStart.isBefore(quietHoursEnd)) {
-            return !localTime.isBefore(quietHoursStart) && localTime.isBefore(quietHoursEnd);
-        }
-        return !localTime.isBefore(quietHoursStart) || localTime.isBefore(quietHoursEnd);
+    public boolean isHabit() {
+        return HABIT.equals(type);
     }
 }
