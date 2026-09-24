@@ -11,6 +11,10 @@
 # or printed.
 #
 # Usage: scripts/deploy.sh [--no-build]
+#
+# --no-build keeps the image that is already deployed and only refreshes
+# compose.yaml, the scripts and .env. The bot is not restarted unless one of
+# those changed.
 set -euo pipefail
 
 DEPLOY_HOST="${DEPLOY_HOST:-era-server}"   # an SSH alias, resolved by ~/.ssh/config
@@ -40,23 +44,32 @@ SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 remote() { ssh "$DEPLOY_HOST" "$@"; }
 
+log "checking $DEPLOY_HOST is reachable"
+remote true
+
 if [[ "$DO_BUILD" == 1 ]]; then
     TAG="$(date +%Y%m%d-%H%M%S)"
     log "building $IMAGE:$TAG"
     docker build -t "$IMAGE:$TAG" -t "$IMAGE:latest" "$SRC_DIR"
 else
-    TAG=latest
-    docker image inspect "$IMAGE:$TAG" >/dev/null
+    # Keep the tag that is already deployed. Compose compares the tag text, so
+    # writing a different name for the same image would recreate the bot.
+    TAG="$(remote "grep -m1 '^IMAGE_TAG=' '$DEPLOY_DIR/.env' 2>/dev/null" | cut -d= -f2 | tr -d "'" || true)"
+    TAG="${TAG:-latest}"
+    log "no build, keeping deployed tag $TAG"
 fi
 
-log "checking $DEPLOY_HOST is reachable"
-remote true
-
-# docker save ships every layer every time, about 100 MB compressed. Fine over
-# Tailscale for a deploy that happens occasionally; a registry would only send
-# the changed layers.
-log "shipping $IMAGE:$TAG"
-docker save "$IMAGE:$TAG" | zstd -T0 -3 -q | remote 'zstd -d -q | docker load'
+if remote "docker image inspect '$IMAGE:$TAG' >/dev/null 2>&1"; then
+    log "$DEPLOY_HOST already has $IMAGE:$TAG, not shipping it"
+else
+    docker image inspect "$IMAGE:$TAG" >/dev/null 2>&1 \
+        || { echo "$IMAGE:$TAG exists on neither machine, run without --no-build" >&2; exit 1; }
+    # docker save ships every layer every time, about 100 MB compressed. Fine
+    # over Tailscale for a deploy that happens occasionally; a registry would
+    # only send the changed layers.
+    log "shipping $IMAGE:$TAG"
+    docker save "$IMAGE:$TAG" | zstd -T0 -3 -q | remote 'zstd -d -q | docker load'
+fi
 
 if ! remote "docker image inspect $DB_IMAGE >/dev/null 2>&1"; then
     log "shipping $DB_IMAGE (first deploy only)"
