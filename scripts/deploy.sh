@@ -1,113 +1,100 @@
 #!/usr/bin/env bash
 #
-# Build the bot image on era-arch and load it onto era-server.
+# Build the bot image on era-arch and ship it to era-server over Tailscale.
 #
-# Run this ON era-server. Nothing here compiles locally: era-server has no JDK
-# and no Gradle, and it is not getting either. The only thing that crosses the
-# link is a finished container image.
+# Run this ON era-arch. The two machines are on different networks, joined only
+# by Tailscale, so era-arch pushes and era-server never pulls from anywhere:
+# not from era-arch, and not from Docker Hub, which fails often from home.
 #
-# Usage: scripts/deploy.sh [--sleep-arch] [--no-build]
+# Secrets come from the environment (~/.secrets on era-arch) and are rendered
+# into the server's .env, mode 600. Nothing secret is stored in the repository
+# or printed.
+#
+# Usage: scripts/deploy.sh [--no-build]
 set -euo pipefail
 
-REMOTE_SRC="${REMOTE_SRC:-/home/era/build/accountability-bot}"
-IMAGE="${IMAGE:-accountability-bot}"
+DEPLOY_HOST="${DEPLOY_HOST:-era-server}"   # an SSH alias, resolved by ~/.ssh/config
 DEPLOY_DIR="${DEPLOY_DIR:-/home/era/homelab/accountability-bot}"
+IMAGE="${IMAGE:-accountability-bot}"
+DB_IMAGE="postgres:16-alpine"              # must match compose.yaml
 
-# Build host addresses live in the deploy .env, not in the repository.
-if [[ -f "$DEPLOY_DIR/.env" ]]; then
-    # shellcheck disable=SC1091
-    set -a; source "$DEPLOY_DIR/.env"; set +a
-fi
-BUILD_HOST="${BUILD_HOST:?set BUILD_HOST (era-arch on the LAN) in $DEPLOY_DIR/.env}"
-BUILD_HOST_TS="${BUILD_HOST_TS:-}"   # era-arch over Tailscale, optional
-
-SLEEP_ARCH=0
 DO_BUILD=1
-WE_WOKE_IT=0
-
 for arg in "$@"; do
     case "$arg" in
-        --sleep-arch) SLEEP_ARCH=1 ;;
-        --no-build)   DO_BUILD=0 ;;
+        --no-build) DO_BUILD=0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
 done
 
+: "${TELEGRAM_BOT_TOKEN:?not set, add it to ~/.secrets}"
+: "${TELEGRAM_OWNER_CHAT_ID:?not set, add it to ~/.secrets}"
+: "${POSTGRES_PASSWORD:?not set, add it to ~/.secrets}"
+
+# The .env values are single-quoted, so a single quote inside one would break
+# the file. openssl rand -hex never produces one.
+for v in "$TELEGRAM_BOT_TOKEN" "$TELEGRAM_OWNER_CHAT_ID" "$POSTGRES_PASSWORD"; do
+    [[ "$v" != *"'"* ]] || { echo "a secret contains a single quote, which .env cannot hold here" >&2; exit 1; }
+done
+
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TAG="$(date +%Y%m%d-%H%M%S)"
-
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
-
-# --- pick a reachable address for era-arch, waking it if it is off ----------
-pick_host() {
-    for h in "$BUILD_HOST" "$BUILD_HOST_TS"; do
-        [[ -n "$h" ]] || continue
-        if ping -c1 -W2 "$h" >/dev/null 2>&1; then
-            echo "$h"; return 0
-        fi
-    done
-    return 1
-}
-
-if ! HOST="$(pick_host)"; then
-    log "era-arch is down, sending Wake-on-LAN burst"
-    /usr/local/bin/wake-pc --wait
-    WE_WOKE_IT=1
-    # SSH is not up the instant the network is.
-    for _ in $(seq 1 30); do
-        HOST="$(pick_host)" && break || sleep 2
-    done
-    HOST="$(pick_host)" || { echo "era-arch never came up" >&2; exit 1; }
-fi
-log "building on era-arch via $HOST"
+remote() { ssh "$DEPLOY_HOST" "$@"; }
 
 if [[ "$DO_BUILD" == 1 ]]; then
-    # --- ship source and build there ---------------------------------------
-    log "syncing source to $HOST:$REMOTE_SRC"
-    ssh "$HOST" "mkdir -p '$REMOTE_SRC'"
-    rsync -az --delete \
-          --exclude '.git/' --exclude 'build/' --exclude '.gradle/' --exclude '.env' \
-          "$SRC_DIR/" "$HOST:$REMOTE_SRC/"
-
-    log "docker build (this is the part that would OOM era-server)"
-    ssh "$HOST" "cd '$REMOTE_SRC' && docker build -t '$IMAGE:$TAG' -t '$IMAGE:latest' ."
-
-    # --- stream the image across the LAN, no registry involved -------------
-    # Both boxes are on the same physical segment, so this runs at wire speed
-    # and never touches the internet, which also avoids the degraded
-    # Cloudflare path that fronts Docker Hub (NOTES.md section 0.8).
-    log "transferring image"
-    ssh "$HOST" "docker save '$IMAGE:$TAG' '$IMAGE:latest'" | docker load
+    TAG="$(date +%Y%m%d-%H%M%S)"
+    log "building $IMAGE:$TAG"
+    docker build -t "$IMAGE:$TAG" -t "$IMAGE:latest" "$SRC_DIR"
+else
+    TAG=latest
+    docker image inspect "$IMAGE:$TAG" >/dev/null
 fi
 
-# --- deploy locally ---------------------------------------------------------
-log "deploying to $DEPLOY_DIR"
-mkdir -p "$DEPLOY_DIR"
-cp "$SRC_DIR/compose.yaml" "$DEPLOY_DIR/compose.yaml"
+log "checking $DEPLOY_HOST is reachable"
+remote true
 
-if [[ ! -f "$DEPLOY_DIR/.env" ]]; then
-    echo "missing $DEPLOY_DIR/.env, copy .env.example and fill it in" >&2
-    exit 1
+# docker save ships every layer every time, about 100 MB compressed. Fine over
+# Tailscale for a deploy that happens occasionally; a registry would only send
+# the changed layers.
+log "shipping $IMAGE:$TAG"
+docker save "$IMAGE:$TAG" | zstd -T0 -3 -q | remote 'zstd -d -q | docker load'
+
+if ! remote "docker image inspect $DB_IMAGE >/dev/null 2>&1"; then
+    log "shipping $DB_IMAGE (first deploy only)"
+    docker image inspect "$DB_IMAGE" >/dev/null 2>&1 || docker pull "$DB_IMAGE"
+    docker save "$DB_IMAGE" | zstd -T0 -3 -q | remote 'zstd -d -q | docker load'
 fi
 
-grep -q '^IMAGE_TAG=' "$DEPLOY_DIR/.env" \
-    && sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$TAG/" "$DEPLOY_DIR/.env" \
-    || echo "IMAGE_TAG=$TAG" >> "$DEPLOY_DIR/.env"
+log "writing compose.yaml, scripts and .env to $DEPLOY_HOST:$DEPLOY_DIR"
+remote "mkdir -p '$DEPLOY_DIR/scripts'"
+remote "cat > '$DEPLOY_DIR/compose.yaml'" < "$SRC_DIR/compose.yaml"
+for s in backup.sh restore.sh; do
+    remote "cat > '$DEPLOY_DIR/scripts/$s' && chmod +x '$DEPLOY_DIR/scripts/$s'" < "$SRC_DIR/scripts/$s"
+done
 
-docker compose --project-directory "$DEPLOY_DIR" up -d
-log "waiting for health"
-for _ in $(seq 1 30); do
-    state="$(docker inspect -f '{{.State.Health.Status}}' accountability-bot 2>/dev/null || echo starting)"
-    [[ "$state" == "healthy" ]] && { log "healthy, deployed $IMAGE:$TAG"; break; }
+# Postgres reads POSTGRES_PASSWORD only when it first creates its data
+# directory. Changing it in ~/.secrets later breaks the bot's login until the
+# database user is changed to match (ALTER USER), or the volume is dropped.
+printf "%s\n" \
+    "TELEGRAM_BOT_TOKEN='$TELEGRAM_BOT_TOKEN'" \
+    "TELEGRAM_OWNER_CHAT_ID='$TELEGRAM_OWNER_CHAT_ID'" \
+    "POSTGRES_PASSWORD='$POSTGRES_PASSWORD'" \
+    "BOT_TESTMODE='${BOT_TESTMODE:-false}'" \
+    "IMAGE_TAG='$TAG'" \
+    | remote "umask 077 && cat > '$DEPLOY_DIR/.env'"
+
+log "starting the stack"
+remote "docker compose --project-directory '$DEPLOY_DIR' up -d"
+
+log "waiting for health (the bot's start period is 90 s)"
+for _ in $(seq 1 36); do
+    state="$(remote "docker inspect -f '{{.State.Health.Status}}' accountability-bot 2>/dev/null" || echo starting)"
+    if [[ "$state" == "healthy" ]]; then
+        log "healthy, deployed $IMAGE:$TAG"
+        exit 0
+    fi
     sleep 5
 done
 
-# --- put era-arch back to sleep, but only if we were the ones who woke it ---
-# Shutting down a machine somebody is actively using is exactly the kind of
-# fail-dangerous behaviour NOTES.md section 3.1 warns about.
-if [[ "$SLEEP_ARCH" == 1 && "$WE_WOKE_IT" == 1 ]]; then
-    log "shutting era-arch back down (we woke it)"
-    ssh "$HOST" "sudo systemctl poweroff" || true
-elif [[ "$SLEEP_ARCH" == 1 ]]; then
-    log "leaving era-arch up, it was already on before this run"
-fi
+echo "not healthy after 3 minutes. Look at:" >&2
+echo "  ssh $DEPLOY_HOST docker compose --project-directory '$DEPLOY_DIR' logs bot" >&2
+exit 1
