@@ -103,7 +103,6 @@ scripts/restore.sh <dump.sql.gz> --yes-really    # drops the schema first
 
 - Tests cover quiet hours and the scheduler, not the command parsing yet.
 - The restore drill has never been run.
-- Not deployed to era-server yet.
 - `lambda-base` and `lambda-max` are guesses. I'll tune them after living with
   the bot for a while.
 
