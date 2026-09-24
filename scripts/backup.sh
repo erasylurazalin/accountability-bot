@@ -5,6 +5,9 @@
 # and the drill is part of the runbook.
 set -euo pipefail
 
+# Dumps hold deadline names. Readable by me only.
+umask 077
+
 DEPLOY_DIR="${DEPLOY_DIR:-/home/era/homelab/accountability-bot}"
 BACKUP_DIR="${BACKUP_DIR:-/home/era/backups/accountability}"
 KEEP_DAYS="${KEEP_DAYS:-30}"

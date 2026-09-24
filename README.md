@@ -96,13 +96,12 @@ docker compose logs -f bot
 curl -s localhost:8081/actuator/health
 
 scripts/backup.sh                                # pg_dump, gzip -t on the result
-scripts/restore.sh <dump.sql.gz> --yes-really    # drops the schema first
+scripts/restore.sh <dump.sql.gz> --yes-really    # drop and reload in one transaction
 ```
 
 ## Not done yet
 
 - Tests cover quiet hours and the scheduler, not the command parsing yet.
-- The restore drill has never been run.
 - `lambda-base` and `lambda-max` are guesses. I'll tune them after living with
   the bot for a while.
 
