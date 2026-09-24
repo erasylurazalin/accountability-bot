@@ -60,6 +60,7 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN must be set}
       TELEGRAM_OWNER_CHAT_ID: ${TELEGRAM_OWNER_CHAT_ID:?TELEGRAM_OWNER_CHAT_ID must be set}
+      BOT_TESTMODE: ${BOT_TESTMODE:-false}
     # Bound to loopback: the bot dials out to Telegram and needs no ingress.
     # This port is only for health checks and, later, metrics scraping.
     ports:
