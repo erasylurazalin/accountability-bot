@@ -13,6 +13,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -51,6 +52,7 @@ public class ReminderScheduler {
     private final ReminderSampler sampler;
     private final ReminderTuning tuning;
     private final TelegramApi telegram;
+    private final Clock clock;
 
     /** How long a claim may sit unsent before the reaper retries it. */
     @Value("${bot.claim-retry-after-seconds:120}")
@@ -65,19 +67,21 @@ public class ReminderScheduler {
                              ReminderRepository reminders,
                              ReminderSampler sampler,
                              ReminderTuning tuning,
-                             TelegramApi telegram) {
+                             TelegramApi telegram,
+                             Clock clock) {
         this.deadlines = deadlines;
         this.userSettings = userSettings;
         this.reminders = reminders;
         this.sampler = sampler;
         this.tuning = tuning;
         this.telegram = telegram;
+        this.clock = clock;
     }
 
     @Scheduled(fixedDelayString = "${bot.tick-interval-ms:60000}",
                initialDelayString = "${bot.tick-initial-delay-ms:15000}")
     public void tick() {
-        Instant now = Instant.now();
+        Instant now = clock.instant();
         try {
             // Tuning can be changed from Telegram mid-run, so it is re-read here
             // rather than captured at boot.
@@ -118,7 +122,14 @@ public class ReminderScheduler {
     }
 
     /**
-     * Draws fire times into the look-ahead window and persists them.
+     * Extends each deadline's chain of fire times until it reaches past the
+     * look-ahead window, persisting every draw.
+     *
+     * Every draw is kept, including one that lands beyond the window or past
+     * the deadline. Discarding it and drawing again next tick would give the
+     * sampler a fresh chance every minute, which pins the rate at the daily cap
+     * no matter how far away the deadline is. A draw past the deadline ends the
+     * chain and is cancelled when the deadline expires.
      *
      * The caps are per calendar day, counted over today in the user's zone.
      * Counting over anything anchored to the deadline itself would leave the
@@ -141,6 +152,10 @@ public class ReminderScheduler {
             Instant capUntil = d.dueAt().isBefore(dayEnd) ? d.dueAt() : dayEnd;
 
             while (true) {
+                Optional<Instant> last = reminders.lastPlanned(d.id());
+                if (last.isPresent() && last.get().isAfter(horizon)) {
+                    break;
+                }
                 if (reminders.countPlanned(d.id(), dayStart, capUntil) >= tuning.maxPerDeadlineDaily()) {
                     break;
                 }
@@ -148,11 +163,9 @@ public class ReminderScheduler {
                     break;
                 }
 
-                Optional<Instant> lastForUser = reminders.lastPlannedForChat(d.chatId(), dayStart);
-                Instant from = lastForUser.filter(now::isBefore).orElse(now);
-
-                var next = sampler.sampleNext(settings, from, d.dueAt(), lastForUser);
-                if (next.isEmpty() || next.get().isAfter(horizon)) {
+                Instant from = last.filter(now::isBefore).orElse(now);
+                var next = sampler.draw(settings, from, d.dueAt(), last);
+                if (next.isEmpty()) {
                     break;
                 }
 
@@ -183,15 +196,23 @@ public class ReminderScheduler {
                 continue;
             }
 
+            // Spacing is checked here too, against the person. Two deadlines can
+            // each plan a reminder for the same minute; the second one waits.
+            var lastClaimed = reminders.lastClaimedForChat(d.chatId());
+            if (lastClaimed.isPresent()
+                    && now.isBefore(lastClaimed.get().plus(Duration.ofMinutes(tuning.minSpacingMinutes())))) {
+                continue;
+            }
+
             String message = StaticTemplates.pick(d, now)
                     + "\n\n%s".formatted(StaticTemplates.when(d, settings.zone()));
 
             // Claim first, then send. Losing this race means another attempt
             // already owns the send, so we stay silent rather than double-fire.
-            if (!reminders.claim(due.id(), message)) {
+            if (!reminders.claim(due.id(), message, now)) {
                 continue;
             }
-            deliver(due.id(), d.chatId(), message, Keyboards.forDeadline(d.id()));
+            deliver(due.id(), d.chatId(), message, Keyboards.forDeadline(d.id()), now);
         }
     }
 
@@ -207,7 +228,7 @@ public class ReminderScheduler {
         for (var claim : reminders.findStaleClaims(olderThan, abandonBefore)) {
             log.info("retrying interrupted reminder claim {}", claim.id());
             deliver(claim.id(), claim.chatId(), claim.body(),
-                    Keyboards.forDeadline(claim.deadlineId()));
+                    Keyboards.forDeadline(claim.deadlineId()), now);
         }
 
         int purged = reminders.purgeAbandoned(abandonBefore);
@@ -216,11 +237,11 @@ public class ReminderScheduler {
         }
     }
 
-    private void deliver(long reminderEventId, long chatId, String message, Object keyboard) {
+    private void deliver(long reminderEventId, long chatId, String message, Object keyboard, Instant now) {
         try {
             var messageId = telegram.sendMessage(chatId, message, keyboard);
             if (messageId.isPresent()) {
-                reminders.markSent(reminderEventId, messageId.get());
+                reminders.markSent(reminderEventId, messageId.get(), now);
             }
             // A rejected send leaves sent_at NULL; the reaper picks it up.
         } catch (RuntimeException e) {

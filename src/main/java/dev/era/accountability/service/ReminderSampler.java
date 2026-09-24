@@ -55,31 +55,46 @@ public class ReminderSampler {
     }
 
     /**
-     * Draws the next fire time, or empty if nothing more should be scheduled.
-     * The guardrails are applied here rather than at send time, because a
-     * reminder that is going to be suppressed is better never scheduled: a
-     * queued reminder still counts against the caps.
-     *
-     * @param from        earliest acceptable time, usually now or the last plan
-     * @param dueAt       when the deadline closes
-     * @param lastForUser latest time already promised to this person, if any
+     * The next fire time in a chain, or empty if the chain has ended before the
+     * deadline. Only for callers that keep nothing, such as /simulate.
      */
     public Optional<Instant> sampleNext(UserSettings settings,
                                         Instant from,
                                         Instant dueAt,
-                                        Optional<Instant> lastForUser) {
+                                        Optional<Instant> lastPlanned) {
+        return draw(settings, from, dueAt, lastPlanned).filter(t -> t.isBefore(dueAt));
+    }
+
+    /**
+     * One draw, returned even when it lands at or past the deadline.
+     *
+     * The tick persists every draw, including the ones it cannot use. A draw
+     * that is thrown away gets redrawn on the next tick, and redrawing every
+     * minute until one fits is a different process with a far higher rate: it
+     * pinned a deadline a month out at the daily cap. A draw past the deadline
+     * is never sent, since the deadline expires first and expiry cancels it,
+     * but while it sits there it ends the chain.
+     *
+     * Empty only when there is nothing to draw from: quiet hours not chosen,
+     * or no room left before the deadline.
+     *
+     * @param from        earliest acceptable time, usually now or the last plan
+     * @param dueAt       when the deadline closes
+     * @param lastPlanned latest time already planned in this chain, if any
+     */
+    public Optional<Instant> draw(UserSettings settings,
+                                  Instant from,
+                                  Instant dueAt,
+                                  Optional<Instant> lastPlanned) {
         if (!settings.quietHoursSet()) {
             // Not chosen yet means send nothing. Guessing a waking window is how
             // a bot earns a permanent mute at 04:00.
             return Optional.empty();
         }
-        if (!from.isBefore(dueAt)) {
-            return Optional.empty();
-        }
 
         Instant earliest = from;
-        if (lastForUser.isPresent()) {
-            Instant spaced = lastForUser.get().plus(Duration.ofMinutes(tuning.minSpacingMinutes()));
+        if (lastPlanned.isPresent()) {
+            Instant spaced = lastPlanned.get().plus(Duration.ofMinutes(tuning.minSpacingMinutes()));
             if (spaced.isAfter(earliest)) {
                 earliest = spaced;
             }
@@ -90,14 +105,9 @@ public class ReminderSampler {
 
         Instant candidate = earliest.plus(exponentialDelay(rateFor(earliest, dueAt)));
 
-        // Walk out of quiet hours rather than resampling blindly, which would
-        // loop forever when quiet hours cover the rest of the time available.
-        candidate = pushPastQuietHours(candidate, settings, dueAt);
-
-        if (candidate == null || !candidate.isBefore(dueAt)) {
-            return Optional.empty();
-        }
-        return Optional.of(candidate);
+        // Walk out of quiet hours rather than resampling, which would be the
+        // same redraw-until-it-fits mistake as above.
+        return Optional.of(pushPastQuietHours(candidate, settings));
     }
 
     /**
@@ -143,23 +153,21 @@ public class ReminderSampler {
 
     /**
      * Moves a candidate forward to the end of quiet hours if it lands inside
-     * them. Returns null if quiet hours swallow everything up to the deadline.
+     * them. The result may be past the deadline, which ends the chain.
      */
-    private Instant pushPastQuietHours(Instant candidate, UserSettings settings, Instant dueAt) {
+    private Instant pushPastQuietHours(Instant candidate, UserSettings settings) {
         var zone = settings.zone();
         // At most a couple of hops: one to clear tonight, one for a wrap past
         // midnight. The bound is what stops a pathological config from spinning.
+        // Should it ever run out, delivery checks quiet hours again anyway.
         for (int hop = 0; hop < 3; hop++) {
             ZonedDateTime local = candidate.atZone(zone);
             if (!settings.isQuiet(local.toLocalTime())) {
                 return candidate;
             }
             candidate = nextQuietEnd(local, settings.quietHoursEnd()).toInstant();
-            if (!candidate.isBefore(dueAt)) {
-                return null;
-            }
         }
-        return null;
+        return candidate;
     }
 
     private static ZonedDateTime nextQuietEnd(ZonedDateTime local, LocalTime quietEnd) {

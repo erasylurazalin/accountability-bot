@@ -1,6 +1,7 @@
 package dev.era.accountability.service;
 
 import dev.era.accountability.config.ReminderProperties;
+import dev.era.accountability.repo.ReminderRepository;
 import dev.era.accountability.repo.ReminderTuningRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,13 +31,17 @@ public class ReminderTuning {
 
     private final ReminderProperties defaults;
     private final ReminderTuningRepository repo;
+    private final ReminderRepository reminders;
 
     private volatile ReminderTuningRepository.Overrides overrides =
             ReminderTuningRepository.Overrides.none();
 
-    public ReminderTuning(ReminderProperties defaults, ReminderTuningRepository repo) {
+    public ReminderTuning(ReminderProperties defaults,
+                          ReminderTuningRepository repo,
+                          ReminderRepository reminders) {
         this.defaults = defaults;
         this.repo = repo;
+        this.reminders = reminders;
     }
 
     /**
@@ -57,13 +62,29 @@ public class ReminderTuning {
     public void set(String key, Number value) {
         repo.set(key, value);
         reload();
+        replan();
         log.info("tuning {} set to {}", key, value);
     }
 
     public void reset() {
         repo.reset();
         reload();
+        replan();
         log.info("tuning reset to application.yml values");
+    }
+
+    /**
+     * Queued draws can sit days ahead and were made with the old numbers, so
+     * a change would otherwise take days to show. The next tick draws again.
+     * That is not the redraw-until-it-fits mistake, because it is triggered by
+     * a person changing the tuning, not by a draw being rejected. An edit made
+     * by hand in psql does not do this.
+     */
+    private void replan() {
+        int dropped = reminders.cancelAllUnsent();
+        if (dropped > 0) {
+            log.info("dropped {} queued reminder(s) drawn with the old tuning", dropped);
+        }
     }
 
     public boolean isOverridden(String key) {
