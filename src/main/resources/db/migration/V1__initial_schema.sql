@@ -1,34 +1,33 @@
--- Initial schema. Derived from NOTES.md section 8, with the stake table
--- deliberately deferred to a later migration (NOTES.md section 3 puts
--- partner-notification after streaks + logged excuses).
+-- One deadline, one row. That is the whole product: a thing due at a moment,
+-- and reminders that arrive at unpredictable times and get more frequent as
+-- that moment approaches.
 --
--- Reminder timing follows NOTES.md section 4: fire times are sampled, not
--- scheduled, so nothing here encodes an interval or a fixed cadence. A daily
--- commitment is due by the end of its local day; there is no configurable
--- window, because a window that cannot be set from Telegram is complexity
--- without a feature.
+-- There is no habit type, no per-day check-in, no streak and no excuse log.
+-- Those existed in an earlier draft and were cut: a deadline is not a daily
+-- thing, so a table giving it one row per day only ever restated the deadline.
 
-CREATE TABLE commitment (
-    id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    chat_id             BIGINT      NOT NULL,
-    name                TEXT        NOT NULL,
-    type                TEXT        NOT NULL CHECK (type IN ('HABIT', 'DEADLINE')),
-    active              BOOLEAN     NOT NULL DEFAULT TRUE,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+CREATE TABLE deadline (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    chat_id    BIGINT      NOT NULL,
+    name       TEXT        NOT NULL CHECK (length(btrim(name)) > 0),
+    due_at     TIMESTAMPTZ NOT NULL,
+    -- DONE is not reachable from any command today: a finished deadline is
+    -- removed. It is here so that adding /done later is not a migration.
+    status     TEXT        NOT NULL DEFAULT 'PENDING'
+               CHECK (status IN ('PENDING', 'DONE', 'EXPIRED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_commitment_active ON commitment (active) WHERE active;
+-- The scheduler's hot path: which deadlines are still live, soonest first.
+CREATE INDEX idx_deadline_pending ON deadline (due_at) WHERE status = 'PENDING';
+CREATE INDEX idx_deadline_chat ON deadline (chat_id, status);
 
--- Timezone and quiet hours are properties of the person, not of the task, so
--- they live here rather than on commitment. A person is in one place at a time;
--- a per-commitment timezone would let "gym" and "coursework" disagree about
--- what day it is.
+-- Timezone and quiet hours belong to the person, not to a deadline.
 --
--- One row is created for a chat the first time it creates a commitment, so the
--- scheduler always has a timezone to work in. Quiet hours are left NULL by that
--- insert: NULL means "not chosen yet", and the scheduler refuses to send
--- anything at all in that state rather than inventing a waking window.
--- Guessing here is how you get pinged at 04:00.
+-- Quiet hours are left NULL until chosen, and the scheduler sends nothing at
+-- all while they are NULL. That is the fail-closed direction: guessing a waking
+-- window is how a bot earns a permanent mute at 04:00.
 CREATE TABLE user_settings (
     chat_id           BIGINT      PRIMARY KEY,
     timezone          TEXT        NOT NULL DEFAULT 'Asia/Almaty',
@@ -41,66 +40,36 @@ CREATE TABLE user_settings (
         CHECK ((quiet_hours_start IS NULL) = (quiet_hours_end IS NULL))
 );
 
--- Only meaningful for type = 'DEADLINE'. A habit's deadline is the end of its
--- local day and needs no row here.
-CREATE TABLE deadline_detail (
-    commitment_id   BIGINT      PRIMARY KEY REFERENCES commitment (id) ON DELETE CASCADE,
-    due_at          TIMESTAMPTZ NOT NULL
-);
-
--- One row per commitment per local day. The unique constraint is what makes
--- materialisation idempotent across restarts.
+-- Live overrides for the sampler, changeable from Telegram with /lambda.
 --
--- due_at is the exclusive upper bound: midnight at the start of the following
--- local day. "Due by 23:59" and "due before midnight" are the same deadline,
--- and an exclusive bound avoids a dead second at 23:59:59.
-CREATE TABLE check_in (
-    id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    commitment_id     BIGINT      NOT NULL REFERENCES commitment (id) ON DELETE CASCADE,
-    local_date        DATE        NOT NULL,
-    due_at            TIMESTAMPTZ NOT NULL,
-    status            TEXT        NOT NULL DEFAULT 'PENDING'
-                      CHECK (status IN ('PENDING', 'DONE', 'SKIPPED', 'EXPIRED')),
-    completed_at      TIMESTAMPTZ,
-    excuse_text       TEXT,
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_check_in_window UNIQUE (commitment_id, local_date),
-    -- NOTES.md section 8: an excuse is mandatory on SKIPPED. Enforced in the
-    -- database, not just the handler, so the friction cannot be bypassed.
-    CONSTRAINT ck_skip_requires_excuse
-        CHECK (status <> 'SKIPPED' OR (excuse_text IS NOT NULL AND length(btrim(excuse_text)) > 0))
+-- The constants in application.yml are a guess and the only way to settle them
+-- is to live with the bot. Editing yaml and rebuilding an image to find that
+-- out is enough friction that the experiment does not happen.
+--
+-- One row. NULL means "no override, use application.yml", which is what makes
+-- /lambda reset a single UPDATE rather than a hunt for the original numbers.
+CREATE TABLE reminder_tuning (
+    id                     INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    lambda_base            DOUBLE PRECISION CHECK (lambda_base > 0),
+    lambda_min             DOUBLE PRECISION CHECK (lambda_min > 0),
+    lambda_max             DOUBLE PRECISION CHECK (lambda_max > 0),
+    min_spacing_minutes    INT CHECK (min_spacing_minutes >= 0),
+    max_per_deadline_daily INT CHECK (max_per_deadline_daily > 0),
+    max_per_user_daily     INT CHECK (max_per_user_daily > 0),
+    schedule_ahead_minutes INT CHECK (schedule_ahead_minutes > 0),
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Only checkable when both are overridden; a mixed case inherits the other
+    -- bound from yaml and is clamped in ReminderTuning instead.
+    CONSTRAINT ck_lambda_range
+        CHECK (lambda_min IS NULL OR lambda_max IS NULL OR lambda_max >= lambda_min)
 );
 
-CREATE INDEX idx_check_in_pending ON check_in (status, due_at)
-    WHERE status = 'PENDING';
-
-CREATE TABLE streak (
-    commitment_id   BIGINT  PRIMARY KEY REFERENCES commitment (id) ON DELETE CASCADE,
-    current_len     INT     NOT NULL DEFAULT 0,
-    best_len        INT     NOT NULL DEFAULT 0,
-    last_success_on DATE
-);
-
--- Filled by the nightly batch (NOTES.md section 5). Empty until a generator is
--- wired up; the static template provider is used until then.
-CREATE TABLE reminder_text (
-    id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    commitment_id BIGINT      REFERENCES commitment (id) ON DELETE CASCADE,
-    urgency_tier  INT         NOT NULL,
-    body          TEXT        NOT NULL CHECK (length(btrim(body)) > 0),
-    generated_by  TEXT        NOT NULL,
-    generated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    consumed_at   TIMESTAMPTZ
-);
-
-CREATE INDEX idx_reminder_text_unconsumed
-    ON reminder_text (commitment_id, urgency_tier)
-    WHERE consumed_at IS NULL;
+INSERT INTO reminder_tuning (id) VALUES (1);
 
 -- A reminder_event row IS the schedule. The fire time is sampled once and
--- persisted here before it is used, which is what makes a sampled schedule
+-- persisted here before it is used, which is what makes a random schedule
 -- survive a restart: after a crash the process reads a decision that was
--- already made instead of drawing a different random number and sending twice.
+-- already made, instead of drawing a different number and sending twice.
 --
 -- Four states, distinguished without a status column:
 --
@@ -110,15 +79,13 @@ CREATE INDEX idx_reminder_text_unconsumed
 --   sent                 sent_at set
 --
 -- The in-flight state is the crash window that claim-before-send deliberately
--- accepts: better a late reminder than a duplicate one, because duplicates
--- train you to ignore the bot.
+-- accepts: better a late reminder than a duplicate, because duplicates train
+-- you to ignore the bot.
 CREATE TABLE reminder_event (
     id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    commitment_id       BIGINT      NOT NULL REFERENCES commitment (id) ON DELETE CASCADE,
-    check_in_id         BIGINT      REFERENCES check_in (id) ON DELETE CASCADE,
-    reminder_text_id    BIGINT      REFERENCES reminder_text (id) ON DELETE SET NULL,
-    -- c{commitment}:{local_date}:n{seq}. seq is a per-day counter rather than a
-    -- slot derived from the clock, because a sampled time cannot be recomputed.
+    deadline_id         BIGINT      NOT NULL REFERENCES deadline (id) ON DELETE CASCADE,
+    -- d{deadline}:n{seq}. seq is a plain counter rather than anything derived
+    -- from the clock, because a sampled time cannot be recomputed.
     idempotency_key     TEXT        NOT NULL,
     seq                 INT         NOT NULL,
     scheduled_for       TIMESTAMPTZ NOT NULL,
@@ -127,8 +94,8 @@ CREATE TABLE reminder_event (
     telegram_message_id BIGINT,
     body                TEXT,
     CONSTRAINT uq_reminder_idempotency UNIQUE (idempotency_key),
-    -- Cannot be sent without having been claimed first. This is invariant 1
-    -- from CLAUDE.md expressed as a constraint rather than as a convention.
+    -- Cannot be sent without having been claimed first: claim-before-send
+    -- expressed as a constraint rather than as a convention.
     CONSTRAINT ck_sent_implies_claimed
         CHECK (sent_at IS NULL OR claimed_at IS NOT NULL)
 );
@@ -141,10 +108,8 @@ CREATE INDEX idx_reminder_event_due ON reminder_event (scheduled_for)
 CREATE INDEX idx_reminder_event_inflight ON reminder_event (claimed_at)
     WHERE sent_at IS NULL AND claimed_at IS NOT NULL;
 
--- Used for the per-user daily cap in NOTES.md section 4.2: the cap that matters
--- is on the person, not on each task independently.
-CREATE INDEX idx_reminder_event_sent ON reminder_event (commitment_id, sent_at)
-    WHERE sent_at IS NOT NULL;
+-- Counting against the daily caps.
+CREATE INDEX idx_reminder_event_deadline ON reminder_event (deadline_id, scheduled_for);
 
 CREATE TABLE audit_log (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

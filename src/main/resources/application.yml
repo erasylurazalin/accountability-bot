@@ -43,33 +43,33 @@ bot:
   token: ${TELEGRAM_BOT_TOKEN:}
   owner-chat-id: ${TELEGRAM_OWNER_CHAT_ID:0}
   poll-timeout: 50
+  # Unlocks /lambda and /simulate. Env var is BOT_TESTMODE:
+  # Spring's relaxed binding strips the dash, so BOT_TEST_MODE does nothing.
+  test-mode: ${BOT_TESTMODE:false}
   tick-interval-ms: 60000
   tick-initial-delay-ms: 15000
-  backfill-days: 2
   claim-retry-after-seconds: 120
   claim-abandon-after-minutes: 60
 
-  # Non-homogeneous Poisson sampler, NOTES.md section 4. The shape of the curve
-  # is the design; these numbers are a preference that only a week of living
-  # with it will settle, which is why they are config and not schema.
+  # Non-homogeneous Poisson sampler. The shape of the curve is the design;
+  # these numbers are a preference that only living with it will settle, which
+  # is why /lambda can override them at runtime.
   reminder:
-    # lambda = A / days_remaining, clamped. 14 reproduces the table in 4.1:
-    # 30 days out ~0.5/day, 7 days ~2/day, 2 days ~7/day, 1 day hits the cap.
-    deadline-lambda-base: 14.0
-    # A habit's whole period is one day, so "days remaining" is the fraction of
-    # today left and A is correspondingly small: ~1/day with 16 h to go,
-    # ~4/day with 4 h to go, capped in the last hour.
-    habit-lambda-base: 0.7
+    # lambda = base / days_remaining, clamped. 14 gives roughly 0.5 reminders
+    # a day 30 days out, 2/day at a week, and hits the ceiling inside the last
+    # day and a half.
+    lambda-base: 14.0
     lambda-min: 0.5
+    # This binds well before the deadline, so past about 1.5 days out it, not
+    # lambda-base, is what controls how often you are pinged.
     lambda-max: 10.0
-    # Guardrails from section 4.2. The per-user cap is the one that matters:
-    # three commitments sampling independently will bury you, so the limit is
-    # on the person, not the task.
+    # Guardrails. The per-user cap is the one that matters: several deadlines
+    # sampling independently will bury you, so the limit is on the person.
     min-spacing-minutes: 45
-    max-per-commitment-per-day: 6
-    max-per-user-per-day: 12
-    # How far ahead fire times are drawn and stored. Short enough that finishing
-    # early does not leave hours of queued nagging behind it.
+    max-per-deadline-daily: 6
+    max-per-user-daily: 12
+    # How far ahead fire times are drawn and stored. Short enough that removing
+    # a deadline does not leave hours of queued nagging behind it.
     schedule-ahead-minutes: 180
 
 logging:

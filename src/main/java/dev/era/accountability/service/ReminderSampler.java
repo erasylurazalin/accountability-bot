@@ -1,21 +1,19 @@
 package dev.era.accountability.service;
 
-import dev.era.accountability.config.ReminderProperties;
-import dev.era.accountability.domain.CheckIn;
-import dev.era.accountability.domain.Commitment;
 import dev.era.accountability.domain.UserSettings;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZonedDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * The non-homogeneous Poisson sampler from NOTES.md section 4.
+ * The non-homogeneous Poisson sampler.
  *
  * A fixed schedule is a calendar app, and a fixed schedule dies to habituation:
  * a 09:00 ping is wallpaper inside a week because you can dismiss it before it
@@ -25,83 +23,108 @@ import java.util.concurrent.ThreadLocalRandom;
  * The rate rises as the deadline approaches:
  *
  * <pre>
- *   lambda(t)  = clamp(A / days_remaining, lambda_min, lambda_max)
- *   next       = now + Exponential(lambda)
+ *   lambda(t) = clamp(base / days_remaining, min, max)
+ *   next      = now + Exponential(lambda)
  * </pre>
  *
- * "Days remaining" means different things for the two commitment types, which is
- * the one thing section 4.1 does not spell out. For a DEADLINE it is literally
- * days until the due date. For a HABIT the deadline is always the end of today,
- * so days_remaining would pin to zero and lambda to its ceiling forever; the
- * same curve is therefore run over the fraction of the local day still left,
- * with a much smaller A. A habit escalates through its day; a deadline escalates
- * across its weeks.
+ * Note that the max clamp binds well before the deadline: with base 14 it is
+ * already pinned about a day and a half out. Past that point raising the base
+ * does nothing and the ceiling is the only knob that matters.
  */
 @Service
 public class ReminderSampler {
 
-    private final ReminderProperties props;
+    private final ReminderTuning tuning;
 
-    public ReminderSampler(ReminderProperties props) {
-        this.props = props;
+    public ReminderSampler(ReminderTuning tuning) {
+        this.tuning = tuning;
     }
 
-    /** Reminders per day at this moment. Exposed for tests and for logging. */
-    public double rateFor(Commitment c, Instant now, Instant deadline) {
-        double daysRemaining = (double) Duration.between(now, deadline).toMinutes() / (60.0 * 24.0);
+    /** Reminders per day at this moment. */
+    public double rateFor(Instant now, Instant dueAt) {
+        double daysRemaining = (double) Duration.between(now, dueAt).toMinutes() / (60.0 * 24.0);
         if (daysRemaining <= 0) {
-            return props.lambdaMax();
+            return tuning.lambdaMax();
         }
-        double base = c.isHabit() ? props.habitLambdaBase() : props.deadlineLambdaBase();
-        return clamp(base / daysRemaining, props.lambdaMin(), props.lambdaMax());
+        return clamp(tuning.lambdaBase() / daysRemaining, tuning.lambdaMin(), tuning.lambdaMax());
+    }
+
+    /** True while the rate is pinned at its ceiling, which /lambda reports. */
+    public boolean atCeiling(Instant now, Instant dueAt) {
+        return rateFor(now, dueAt) >= tuning.lambdaMax();
     }
 
     /**
-     * Draws the next fire time, or empty if nothing more should be scheduled for
-     * this day. The guardrails from NOTES.md section 4.2 are applied here rather
-     * than at send time, because a reminder that is going to be suppressed is
-     * better never scheduled: a queued reminder still counts against the caps.
+     * Draws the next fire time, or empty if nothing more should be scheduled.
+     * The guardrails are applied here rather than at send time, because a
+     * reminder that is going to be suppressed is better never scheduled: a
+     * queued reminder still counts against the caps.
      *
-     * @param from      earliest acceptable time, usually now or the last plan
-     * @param deadline  when the day or the deadline closes
+     * @param from        earliest acceptable time, usually now or the last plan
+     * @param dueAt       when the deadline closes
      * @param lastForUser latest time already promised to this person, if any
      */
-    public Optional<Instant> sampleNext(Commitment c,
-                                        UserSettings settings,
+    public Optional<Instant> sampleNext(UserSettings settings,
                                         Instant from,
-                                        Instant deadline,
+                                        Instant dueAt,
                                         Optional<Instant> lastForUser) {
         if (!settings.quietHoursSet()) {
             // Not chosen yet means send nothing. Guessing a waking window is how
             // a bot earns a permanent mute at 04:00.
             return Optional.empty();
         }
-        if (!from.isBefore(deadline)) {
+        if (!from.isBefore(dueAt)) {
             return Optional.empty();
         }
 
         Instant earliest = from;
         if (lastForUser.isPresent()) {
-            Instant spaced = lastForUser.get().plus(Duration.ofMinutes(props.minSpacingMinutes()));
+            Instant spaced = lastForUser.get().plus(Duration.ofMinutes(tuning.minSpacingMinutes()));
             if (spaced.isAfter(earliest)) {
                 earliest = spaced;
             }
         }
-        if (!earliest.isBefore(deadline)) {
+        if (!earliest.isBefore(dueAt)) {
             return Optional.empty();
         }
 
-        double lambda = rateFor(c, earliest, deadline);
-        Instant candidate = earliest.plus(exponentialDelay(lambda));
+        Instant candidate = earliest.plus(exponentialDelay(rateFor(earliest, dueAt)));
 
         // Walk out of quiet hours rather than resampling blindly, which would
-        // loop forever when quiet hours cover the rest of the day.
-        candidate = pushPastQuietHours(candidate, settings, deadline);
+        // loop forever when quiet hours cover the rest of the time available.
+        candidate = pushPastQuietHours(candidate, settings, dueAt);
 
-        if (candidate == null || !candidate.isBefore(deadline)) {
+        if (candidate == null || !candidate.isBefore(dueAt)) {
             return Optional.empty();
         }
         return Optional.of(candidate);
+    }
+
+    /**
+     * Draws a whole run of fire times without persisting any of them, for the
+     * /simulate command.
+     *
+     * This is emphatically not the schedule. Timing is sampled, so every call
+     * returns a different sequence, and the sequence that will actually fire is
+     * the one written into reminder_event by the tick. What this is good for is
+     * seeing the shape: how the gaps tighten as the deadline closes, and where
+     * quiet hours bite. Judging whether the numbers are annoying enough is
+     * otherwise a week-long experiment per guess.
+     */
+    public List<Instant> simulate(UserSettings settings, Instant from, Instant dueAt, int maxDraws) {
+        var out = new ArrayList<Instant>();
+        Optional<Instant> last = Optional.empty();
+        Instant cursor = from;
+        while (out.size() < maxDraws) {
+            var next = sampleNext(settings, cursor, dueAt, last);
+            if (next.isEmpty()) {
+                break;
+            }
+            out.add(next.get());
+            last = next;
+            cursor = next.get();
+        }
+        return out;
     }
 
     /**
@@ -122,7 +145,7 @@ public class ReminderSampler {
      * Moves a candidate forward to the end of quiet hours if it lands inside
      * them. Returns null if quiet hours swallow everything up to the deadline.
      */
-    private Instant pushPastQuietHours(Instant candidate, UserSettings settings, Instant deadline) {
+    private Instant pushPastQuietHours(Instant candidate, UserSettings settings, Instant dueAt) {
         var zone = settings.zone();
         // At most a couple of hops: one to clear tonight, one for a wrap past
         // midnight. The bound is what stops a pathological config from spinning.
@@ -132,7 +155,7 @@ public class ReminderSampler {
                 return candidate;
             }
             candidate = nextQuietEnd(local, settings.quietHoursEnd()).toInstant();
-            if (!candidate.isBefore(deadline)) {
+            if (!candidate.isBefore(dueAt)) {
                 return null;
             }
         }
@@ -146,18 +169,5 @@ public class ReminderSampler {
 
     private static double clamp(double v, double min, double max) {
         return Math.min(Math.max(v, min), max);
-    }
-
-    /**
-     * Deadline for a check-in: its own due_at, which for a habit is midnight at
-     * the start of the following local day.
-     */
-    public static Instant deadlineFor(CheckIn ci) {
-        return ci.dueAt();
-    }
-
-    /** Start of a local day, used as the lower bound for per-day counting. */
-    public static Instant startOfDay(LocalDate day, UserSettings settings) {
-        return day.atStartOfDay(settings.zone()).toInstant();
     }
 }

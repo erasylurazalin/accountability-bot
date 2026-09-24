@@ -8,7 +8,14 @@ public final class TelegramDto {
 
     public record ApiResponse<T>(boolean ok, T result, String description) {}
 
-    public record Update(Long update_id, Message message) {}
+    /**
+     * A button tap arrives as a callback_query, not as a message, which is why
+     * the poller has to ask for that update type explicitly. Telegram shows a
+     * spinner on the button until answerCallbackQuery is called.
+     */
+    public record Update(Long update_id, Message message, CallbackQuery callback_query) {}
+
+    public record CallbackQuery(String id, User from, Message message, String data) {}
 
     public record Message(Long message_id, Chat chat, String text, User from) {}
 
