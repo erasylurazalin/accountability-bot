@@ -1,4 +1,3 @@
-README.md
 NOTES.md
 # Gradle. The wrapper itself (gradlew, gradle/wrapper/) is committed on purpose,
 # so nothing here may match gradle-wrapper.jar.
