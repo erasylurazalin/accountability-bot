@@ -9,11 +9,17 @@
 # Usage: scripts/deploy.sh [--sleep-arch] [--no-build]
 set -euo pipefail
 
-BUILD_HOST="${BUILD_HOST:-192.168.31.160}"      # era-arch on the LAN
-BUILD_HOST_TS="${BUILD_HOST_TS:-100.124.45.116}" # era-arch over Tailscale
 REMOTE_SRC="${REMOTE_SRC:-/home/era/build/accountability-bot}"
 IMAGE="${IMAGE:-accountability-bot}"
 DEPLOY_DIR="${DEPLOY_DIR:-/home/era/homelab/accountability-bot}"
+
+# Build host addresses live in the deploy .env, not in the repository.
+if [[ -f "$DEPLOY_DIR/.env" ]]; then
+    # shellcheck disable=SC1091
+    set -a; source "$DEPLOY_DIR/.env"; set +a
+fi
+BUILD_HOST="${BUILD_HOST:?set BUILD_HOST (era-arch on the LAN) in $DEPLOY_DIR/.env}"
+BUILD_HOST_TS="${BUILD_HOST_TS:-}"   # era-arch over Tailscale, optional
 
 SLEEP_ARCH=0
 DO_BUILD=1
@@ -35,6 +41,7 @@ log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 # --- pick a reachable address for era-arch, waking it if it is off ----------
 pick_host() {
     for h in "$BUILD_HOST" "$BUILD_HOST_TS"; do
+        [[ -n "$h" ]] || continue
         if ping -c1 -W2 "$h" >/dev/null 2>&1; then
             echo "$h"; return 0
         fi
