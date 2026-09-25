@@ -48,7 +48,7 @@ jobs:
       # Fails on high or critical CVEs that have a fix available. Unfixed ones
       # are left out: there is nothing to upgrade to, so failing on them would
       # only teach me to ignore a red build.
-      - uses: aquasecurity/trivy-action@0.36.0
+      - uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: accountability-bot:ci
           scanners: vuln
