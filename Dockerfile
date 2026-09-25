@@ -26,7 +26,7 @@ RUN gradle --no-daemon bootJar --no-build-cache -x test
 # If this step fails on a different Spring Boot version, the fallback is to skip
 # this stage and COPY the fat jar straight into the runtime stage.
 # ---------------------------------------------------------------------------
-FROM eclipse-temurin:21-jre-alpine AS extract
+FROM eclipse-temurin:25-jre-alpine AS extract
 WORKDIR /extract
 COPY --from=build /src/build/libs/*.jar app.jar
 # The destination layout has moved between Spring Boot versions (some releases
@@ -42,7 +42,7 @@ RUN java -Djarmode=tools -jar app.jar extract --layers --destination out \
 # Runtime. era-server never sees a JDK, Gradle, or a Maven cache: the JRE and
 # the application both live in here.
 # ---------------------------------------------------------------------------
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:25-jre-alpine
 WORKDIR /app
 
 # apk upgrade picks up Alpine security fixes that landed after the base image
