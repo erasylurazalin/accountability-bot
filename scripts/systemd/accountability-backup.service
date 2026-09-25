@@ -1,0 +1,9 @@
+[Unit]
+Description=pg_dump the accountability bot database
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=era
+ExecStart=/home/era/homelab/accountability-bot/scripts/backup.sh
