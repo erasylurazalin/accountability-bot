@@ -13,7 +13,7 @@
 # Usage: scripts/deploy.sh [--no-build]
 #
 # --no-build keeps the image that is already deployed and only refreshes
-# compose.yaml, the scripts and .env. The bot is not restarted unless one of
+# compose.yaml, the scripts, the systemd timers and .env. The bot is not restarted unless one of
 # those changed.
 set -euo pipefail
 
@@ -80,7 +80,7 @@ fi
 log "writing compose.yaml, scripts and .env to $DEPLOY_HOST:$DEPLOY_DIR"
 remote "mkdir -p '$DEPLOY_DIR/scripts'"
 remote "cat > '$DEPLOY_DIR/compose.yaml'" < "$SRC_DIR/compose.yaml"
-for s in backup.sh restore.sh; do
+for s in backup.sh restore.sh healthcheck.sh; do
     remote "cat > '$DEPLOY_DIR/scripts/$s' && chmod +x '$DEPLOY_DIR/scripts/$s'" < "$SRC_DIR/scripts/$s"
 done
 
@@ -94,6 +94,25 @@ printf "%s\n" \
     "BOT_TESTMODE='${BOT_TESTMODE:-false}'" \
     "IMAGE_TAG='$TAG'" \
     | remote "umask 077 && cat > '$DEPLOY_DIR/.env'"
+
+# The nightly backup and the health check run from systemd timers on the
+# server. Units are copied only when they differ, so a redeploy with no unit
+# changes does not reload systemd. Needs passwordless sudo on the server.
+log "installing systemd timers"
+remote "mkdir -p '$DEPLOY_DIR/systemd'"
+for u in "$SRC_DIR"/scripts/systemd/*; do
+    remote "cat > '$DEPLOY_DIR/systemd/$(basename "$u")'" < "$u"
+done
+remote "bash -s -- '$DEPLOY_DIR'" <<'EOF'
+set -euo pipefail
+changed=0
+for u in "$1"/systemd/*; do
+    dst="/etc/systemd/system/$(basename "$u")"
+    cmp -s "$u" "$dst" || { sudo install -m 644 "$u" "$dst"; changed=1; }
+done
+if [[ "$changed" == 1 ]]; then sudo systemctl daemon-reload; fi
+sudo systemctl enable --now --quiet accountability-backup.timer accountability-health.timer
+EOF
 
 log "starting the stack"
 remote "docker compose --project-directory '$DEPLOY_DIR' up -d"

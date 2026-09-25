@@ -1,0 +1,11 @@
+[Unit]
+Description=Check the accountability bot every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+# Checks are cheap and only the latest matters, so a missed one is not
+# worth running at boot.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

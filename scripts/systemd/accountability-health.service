@@ -1,0 +1,7 @@
+[Unit]
+Description=Check the accountability bot and its backups, alert on Telegram
+
+[Service]
+Type=oneshot
+User=era
+ExecStart=/home/era/homelab/accountability-bot/scripts/healthcheck.sh
