@@ -53,13 +53,26 @@ On an old low-memory laptop at home, behind NAT. That shaped the setup:
 The Dockerfile is multi-stage: Gradle build, then Spring Boot's layered jar
 split into layers, then a JRE-only runtime as a non-root user.
 
-`scripts/` has the deploy, a `pg_dump` backup that checks its own output, and a
-restore that drops and reloads in one transaction.
+## Backups and monitoring
+
+Two systemd timers on the server:
+
+- **Nightly backup.** `pg_dump`, checked with `gzip -t` before anything old is
+  pruned. `scripts/restore.sh` drops and reloads in one transaction, and the
+  restore has been tested against a scratch database.
+- **Health check every 5 minutes.** It messages me on Telegram when the bot is
+  down or the last backup is too old, once when it breaks and once when it's
+  fixed. The bot can't report its own death, so this runs outside it.
+
+Backups stay on the same machine for now. An off-machine copy is next.
 
 ## Tests and CI
 
-GitHub Actions runs the tests and builds the image on every push. The scheduler
-tests run the real tick against a real Postgres (Testcontainers), with an
-injected clock so days of ticks take about a second.
+GitHub Actions runs the tests, builds the image and scans it with Trivy on every
+push. The build fails on high or critical CVEs that have a fix available.
+Dependabot keeps the dependencies current.
+
+The scheduler tests run the real tick against a real Postgres (Testcontainers),
+with an injected clock so days of ticks take about a second.
 
 Not covered yet: command parsing, DST, expiry.
