@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# pg_dump the bot database. NOTES.md section 7 is explicit that a backup nobody
-# has restored is not a backup, so scripts/restore.sh exists next to this one
-# and the drill is part of the runbook.
+# pg_dump the bot database. A backup nobody has restored is not a backup, so
+# scripts/restore.sh exists next to this one and the restore drill has been run.
+# Runs nightly from scripts/systemd/accountability-backup.timer.
 set -euo pipefail
 
 # Dumps hold deadline names. Readable by me only.

@@ -25,8 +25,7 @@ import java.util.Optional;
  * A single tick that recomputes what is due from the database, rather than a
  * set of individually scheduled timers. See docs/adr/0001-tick-based-scheduler.
  *
- * Reminder timing is sampled, not fixed, so the tick has one more job than the
- * ADR describes: it plans ahead. A fire time is drawn and written down before
+ * Reminder timing is sampled, not fixed, so the tick plans ahead. A fire time is drawn and written down before
  * it is used, and the tick only ever delivers plans that already exist. That is
  * what makes a random schedule restart-safe. Recomputing the time after a crash
  * would draw a different number, and the idempotency key could not protect you
