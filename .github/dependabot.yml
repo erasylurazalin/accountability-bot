@@ -1,0 +1,36 @@
+# Weekly pull requests for stale dependencies. Minor and patch updates are
+# grouped into one PR per ecosystem so they do not bury the repo; major updates
+# (Spring Boot 4, Postgres 17) come on their own, since they need reading first.
+version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      gradle-minor:
+        update-types: [minor, patch]
+
+  # FROM lines in the Dockerfile.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  # postgres:16-alpine in compose.yaml. A major Postgres upgrade needs a dump
+  # and restore of the data volume, so those are ignored rather than proposed.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: postgres
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

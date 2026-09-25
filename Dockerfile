@@ -18,8 +18,10 @@ RUN gradle --no-daemon bootJar --no-build-cache -x test
 
 # ---------------------------------------------------------------------------
 # Layer extraction. Spring Boot's layered jar puts dependencies in a different
-# image layer from application classes, so an incremental deploy pushes a couple
-# of megabytes instead of the whole ~250 MB image.
+# image layer from application classes, so a code-only rebuild reuses the
+# dependency layer from cache. Pushed to a registry, only the few-megabyte
+# application layer would travel; scripts/deploy.sh uses docker save instead,
+# which ships every layer each time.
 #
 # If this step fails on a different Spring Boot version, the fallback is to skip
 # this stage and COPY the fat jar straight into the runtime stage.
@@ -43,7 +45,9 @@ RUN java -Djarmode=tools -jar app.jar extract --layers --destination out \
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
-RUN addgroup -S app && adduser -S -G app app
+# apk upgrade picks up Alpine security fixes that landed after the base image
+# was published. The Trivy scan in CI is what notices when they matter.
+RUN apk upgrade --no-cache && addgroup -S app && adduser -S -G app app
 
 COPY --from=extract /layers/dependencies/ ./
 COPY --from=extract /layers/spring-boot-loader/ ./

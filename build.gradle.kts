@@ -1,6 +1,6 @@
 plugins {
     java
-    id("org.springframework.boot") version "3.4.1"
+    id("org.springframework.boot") version "3.5.16"
     id("io.spring.dependency-management") version "1.1.7"
 }
 
@@ -13,9 +13,10 @@ java {
 
 repositories { mavenCentral() }
 
-// Boot 3.4.1 pins Testcontainers 1.20.4, whose Docker API version is too old
-// for Docker 29.
-extra["testcontainers.version"] = "1.21.4"
+// Patch releases ahead of what Boot 3.5.16 pins, for CVEs the image scan in CI
+// flags. Drop each line once Boot catches up.
+extra["postgresql.version"] = "42.7.12"
+extra["tomcat.version"] = "10.1.60"
 
 dependencies {
     // Deliberately lean: no JPA/Hibernate. See docs/adr/0002-jdbcclient-over-jpa.md
