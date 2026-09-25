@@ -5,7 +5,7 @@
 # app wants 1–2 GB and would fight Postgres and AdGuard for a 4 GB budget.
 # Build on era-arch (or a GitHub-hosted runner) and ship the image over.
 # ---------------------------------------------------------------------------
-FROM gradle:8.12-jdk21 AS build
+FROM gradle:9.7-jdk21 AS build
 WORKDIR /src
 
 # Dependency resolution is cached separately from source so a code-only change
