@@ -77,3 +77,6 @@ The scheduler tests run the real tick against a real Postgres (Testcontainers),
 with an injected clock so days of ticks take about a second.
 
 Not covered yet: command parsing, DST, expiry.
+
+What I'm planning next, including opening it up to other people, is in
+[TODO.md](TODO.md).
