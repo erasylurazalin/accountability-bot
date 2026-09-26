@@ -34,8 +34,9 @@ knobs are in `application.yml` under `bot.reminder`.
 
 Random times can't be recomputed after a restart, so each one is written to
 Postgres before it's used, and a one-minute tick sends whatever is due. A
-reminder is marked as claimed before it goes to Telegram, so a crash can lose
-one but never send it twice.
+reminder is marked as claimed before it goes to Telegram, so two ticks can
+never both send it. A crash mid-send is retried, which can occasionally mean a
+duplicate: Telegram has no way to ask whether a message already arrived.
 
 Why a tick and not Quartz: [ADR 0001](docs/adr/0001-tick-based-scheduler.md).
 Why JdbcClient and not JPA: [ADR 0002](docs/adr/0002-jdbcclient-over-jpa.md).
