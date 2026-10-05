@@ -17,6 +17,7 @@ repositories { mavenCentral() }
 // flags. Drop each line once Boot catches up.
 extra["postgresql.version"] = "42.7.12"
 extra["tomcat.version"] = "10.1.60"
+extra["jackson-bom.version"] = "2.21.7"
 
 dependencies {
     // Deliberately lean: no JPA/Hibernate. See docs/adr/0002-jdbcclient-over-jpa.md
