@@ -6,6 +6,7 @@ import dev.era.accountability.repo.DeadlineRepository;
 import dev.era.accountability.repo.ReminderRepository;
 import dev.era.accountability.repo.UserSettingsRepository;
 import dev.era.accountability.telegram.Keyboards;
+import dev.era.accountability.telegram.Render;
 import dev.era.accountability.telegram.TelegramApi;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -203,15 +204,20 @@ public class ReminderScheduler {
                 continue;
             }
 
+            // Wording stays in StaticTemplates; the stamp and the countdown are
+            // formatting, and Render is the only place that does formatting, so a
+            // reminder and its card agree about how time is written.
             String message = StaticTemplates.pick(d, now)
-                    + "\n\n%s".formatted(StaticTemplates.when(d, settings.zone()));
+                    + "\n%s  <i>%s</i>".formatted(
+                            Render.stamp(d.dueAt(), settings.zone()),
+                            Render.relative(d.dueAt(), now));
 
             // Claim first, then send. Losing this race means another attempt
             // already owns the send, so we stay silent rather than double-fire.
             if (!reminders.claim(due.id(), message, now)) {
                 continue;
             }
-            deliver(due.id(), d.chatId(), message, Keyboards.forDeadline(d.id()), now);
+            deliver(due.id(), d.chatId(), message, Keyboards.card(d.id()), now);
         }
     }
 
@@ -227,7 +233,7 @@ public class ReminderScheduler {
         for (var claim : reminders.findStaleClaims(olderThan, abandonBefore)) {
             log.info("retrying interrupted reminder claim {}", claim.id());
             deliver(claim.id(), claim.chatId(), claim.body(),
-                    Keyboards.forDeadline(claim.deadlineId()), now);
+                    Keyboards.card(claim.deadlineId()), now);
         }
 
         int purged = reminders.purgeAbandoned(abandonBefore);

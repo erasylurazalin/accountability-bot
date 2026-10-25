@@ -105,11 +105,16 @@ public class TelegramApi {
      * Every tap must be answered or the button spins on the user's screen for
      * about a minute. The optional text appears as a small toast.
      */
-    public void answerCallbackQuery(String callbackQueryId, String toast) {
+    public void answerCallbackQuery(String callbackQueryId, String toast, boolean alert) {
         var body = new HashMap<String, Object>();
         body.put("callback_query_id", callbackQueryId);
         if (toast != null) {
             body.put("text", toast);
+        }
+        // A popup rather than a toast, for when the tap did nothing and the
+        // reason matters (a date in the past, a name that is too long).
+        if (alert) {
+            body.put("show_alert", true);
         }
         try {
             client.post().uri("/answerCallbackQuery").body(body).retrieve().toBodilessEntity();

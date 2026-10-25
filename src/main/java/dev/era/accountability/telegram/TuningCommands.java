@@ -7,7 +7,6 @@ import dev.era.accountability.repo.ReminderTuningRepository;
 import dev.era.accountability.repo.UserSettingsRepository;
 import dev.era.accountability.service.ReminderSampler;
 import dev.era.accountability.service.ReminderTuning;
-import dev.era.accountability.service.StaticTemplates;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -121,8 +120,8 @@ public class TuningCommands {
             double rate = sampler.rateFor(now, d.dueAt());
             long meanGap = Math.round(24 * 60 / rate);
             sb.append("  #%d %s\n    lambda %.2f/day, mean gap %s, %s left\n".formatted(
-                    d.id(), d.name(), rate, StaticTemplates.human(Duration.ofMinutes(meanGap)),
-                    StaticTemplates.human(Duration.between(now, d.dueAt()))));
+                    d.id(), d.name(), rate, Render.human(Duration.ofMinutes(meanGap)),
+                    Render.human(Duration.between(now, d.dueAt()))));
             // Worth calling out: while the ceiling binds, changing 'base' does
             // nothing at all, and you would conclude the command is broken
             // rather than that 'max' is the live knob.
@@ -160,7 +159,7 @@ public class TuningCommands {
         Instant prev = now;
         for (Instant t : draws) {
             sb.append("  %s   +%s\n".formatted(
-                    STAMP.format(t.atZone(zone)), StaticTemplates.human(Duration.between(prev, t))));
+                    STAMP.format(t.atZone(zone)), Render.human(Duration.between(prev, t))));
             prev = t;
         }
         if (draws.isEmpty()) {

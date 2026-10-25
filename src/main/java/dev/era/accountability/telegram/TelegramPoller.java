@@ -23,19 +23,19 @@ public class TelegramPoller implements ApplicationRunner {
     private static final long MAX_BACKOFF_MS = 60_000L;
 
     private final TelegramApi api;
-    private final CommandRouter router;
-    private final CallbackRouter callbacks;
+    private final CommandRouter commands;
+    private final UiRouter ui;
     private final PollStateRepository pollState;
     private final BotProperties props;
 
     private final AtomicBoolean running = new AtomicBoolean(true);
     private Thread thread;
 
-    public TelegramPoller(TelegramApi api, CommandRouter router, CallbackRouter callbacks,
+    public TelegramPoller(TelegramApi api, CommandRouter commands, UiRouter ui,
                           PollStateRepository pollState, BotProperties props) {
         this.api = api;
-        this.router = router;
-        this.callbacks = callbacks;
+        this.commands = commands;
+        this.ui = ui;
         this.pollState = pollState;
         this.props = props;
     }
@@ -45,7 +45,7 @@ public class TelegramPoller implements ApplicationRunner {
         // Telegram stores the menu server-side, so this only has to be sent
         // when it changes. Sending it every boot is simpler than tracking that,
         // and a failure only leaves a stale menu.
-        api.setMyCommands(router.menuCommands());
+        api.setMyCommands(commands.menuCommands());
 
         thread = new Thread(this::loop, "telegram-poller");
         thread.setDaemon(true);
@@ -109,8 +109,12 @@ public class TelegramPoller implements ApplicationRunner {
             return;
         }
 
-        Reply reply = router.handle(chatId, message.text());
-        api.sendMessage(chatId, reply.text(), reply.keyboard());
+        // A text message is an answer to a question if one is open, and a
+        // command otherwise. The order matters: a deadline called "/list"
+        // typed while the bot is waiting for a name is a name.
+        UiAction action = ui.text(chatId, message.text())
+                .orElseGet(() -> commands.handle(chatId, message.text()));
+        perform(chatId, action, null);
     }
 
     /**
@@ -128,15 +132,33 @@ public class TelegramPoller implements ApplicationRunner {
             return;
         }
 
-        var result = callbacks.handle(chatId, query.data());
+        UiAction action = ui.tap(chatId, query.data(), message.message_id());
 
         // Answer first and unconditionally. An unanswered tap leaves the button
         // spinning on the phone for about a minute, including when the action
         // itself failed.
-        api.answerCallbackQuery(query.id(), result.toast());
+        api.answerCallbackQuery(query.id(), action.toast(), action.alert());
 
-        if (result.text() != null) {
-            api.editMessageText(chatId, message.message_id(), result.text(), result.keyboard());
+        perform(chatId, action, message.message_id());
+    }
+
+    /**
+     * @param currentMessage the message to rewrite when the action asks for it,
+     *                       unless the action names one itself (a typed answer
+     *                       rewriting the question that asked for it).
+     */
+    private void perform(long chatId, UiAction action, Long currentMessage) {
+        switch (action.mode()) {
+            case SEND -> api.sendMessage(chatId, action.text(), action.markup());
+            case REPLACE -> {
+                Long target = action.messageId() != null ? action.messageId() : currentMessage;
+                if (target != null) {
+                    api.editMessageText(chatId, target, action.text(), action.markup());
+                } else {
+                    api.sendMessage(chatId, action.text(), action.markup());
+                }
+            }
+            case NOTHING -> { }
         }
     }
 

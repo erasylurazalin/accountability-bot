@@ -11,17 +11,28 @@ It's built for me, not packaged for anyone else to run.
 
 Java 21, Spring Boot 4.1, PostgreSQL 16, Flyway, Docker Compose.
 
-## Commands
+## Using it
+
+It is a menu bot. The Menu button next to the text box, or `/start`, gives you:
+
+- **New deadline**: send the name, then pick a day and a time from the buttons.
+  Another date or time can be typed instead.
+- **Pending**: grouped by day, with one tap per deadline opening its card.
+- **Quiet hours**: pick a window, or turn reminders off.
+
+Every deadline card has Done, +1h, +1 day, Edit and Remove under it, and the
+buttons clear once a deadline is settled.
+
+Only three things are still typed:
 
 ```
-/new tomorrow 23:59 hand in essay     add a deadline (today, tomorrow or YYYY-MM-DD)
-/list                                 pending, plus anything that lapsed this week
-/edit 1 2026-09-02 09:00              move it (reopens a lapsed one)
-/edit 1 a better name                 rename it
-/remove 1                             delete it
-/quiet 02:00 10:00                    hours to stay silent
-/quiet off                            clear them
+/start   the menu
+/list    what is pending
+/help    how this works
 ```
+
+The wizard state lives in Postgres (`ui_draft`), so deploying or restarting in
+the middle of adding a deadline does not lose it.
 
 No reminders go out until quiet hours are set, so a wrong guess can't ping me
 at 4 am. Only my own chat id can use the bot; everything else is dropped.
@@ -74,9 +85,11 @@ push. The build fails on high or critical CVEs that have a fix available.
 Dependabot keeps the dependencies current.
 
 The scheduler tests run the real tick against a real Postgres (Testcontainers),
-with an injected clock so days of ticks take about a second.
+with an injected clock so days of ticks take about a second. The UI tests drive
+the same buttons a phone would tap: create a deadline without typing a command,
+a draft that survives a restart, a cancelled flow that leaves nothing behind.
 
-Not covered yet: command parsing, DST, expiry.
+Not covered yet: DST, expiry, the reaper.
 
 What I'm planning next, including opening it up to other people, is in
 [TODO.md](TODO.md).

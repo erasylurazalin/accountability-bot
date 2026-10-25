@@ -2,8 +2,8 @@ package dev.era.accountability.service;
 
 import dev.era.accountability.domain.Deadline;
 
-import java.time.Duration;
 import java.time.Instant;
+
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -45,23 +45,4 @@ public final class StaticTemplates {
         return tier.get(ThreadLocalRandom.current().nextInt(tier.size())).formatted(name);
     }
 
-    /** "26 Aug 23:59, in 2d 4h", the line every reminder ends with. */
-    public static String when(Deadline d, ZoneId zone) {
-        Duration left = Duration.between(Instant.now(), d.dueAt());
-        return "%s (%s left)".formatted(STAMP.format(d.dueAt().atZone(zone)), human(left));
-    }
-
-    public static String human(Duration d) {
-        long minutes = Math.max(0, d.toMinutes());
-        long days = minutes / (60 * 24);
-        long hours = (minutes % (60 * 24)) / 60;
-        long mins = minutes % 60;
-        if (days > 0) {
-            return "%dd %dh".formatted(days, hours);
-        }
-        if (hours > 0) {
-            return "%dh%02d".formatted(hours, mins);
-        }
-        return "%dm".formatted(mins);
-    }
 }
