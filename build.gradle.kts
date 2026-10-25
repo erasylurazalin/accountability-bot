@@ -1,6 +1,6 @@
 plugins {
     java
-    id("org.springframework.boot") version "3.5.16"
+    id("org.springframework.boot") version "4.1.2"
     id("io.spring.dependency-management") version "1.1.7"
 }
 
@@ -13,11 +13,10 @@ java {
 
 repositories { mavenCentral() }
 
-// Patch releases ahead of what Boot 3.5.16 pins, for CVEs the image scan in CI
-// flags. Drop each line once Boot catches up.
-extra["postgresql.version"] = "42.7.12"
-extra["tomcat.version"] = "10.1.60"
-extra["jackson-bom.version"] = "2.21.7"
+// No patch pins any more. Boot 4.1.2 manages Tomcat 11.0.x, Jackson 3.1.x and a
+// current Postgres driver, all above the versions pinned for the Boot 3.5 CVEs.
+// The upgrade itself is driven by Spring Framework 6.2 being EOL: CVE-2026-47884
+// and CVE-2026-47890 have no fix in that line.
 
 dependencies {
     // Deliberately lean: no JPA/Hibernate. See docs/adr/0002-jdbcclient-over-jpa.md
@@ -26,12 +25,16 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
+    // Boot 4 split autoconfiguration out into per-technology modules: without
+    // this one, Flyway is on the classpath but never runs, and the app starts
+    // against an empty schema.
+    implementation("org.springframework.boot:spring-boot-flyway")
     runtimeOnly("org.postgresql:postgresql")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.boot:spring-boot-testcontainers")
-    testImplementation("org.testcontainers:junit-jupiter")
-    testImplementation("org.testcontainers:postgresql")
+    testImplementation("org.testcontainers:testcontainers-junit-jupiter")
+    testImplementation("org.testcontainers:testcontainers-postgresql")
 }
 
 tasks.withType<Test> { useJUnitPlatform() }

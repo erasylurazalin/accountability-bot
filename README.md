@@ -9,7 +9,7 @@ app, and I stop seeing them within a week.
 
 It's built for me, not packaged for anyone else to run.
 
-Java 21, Spring Boot 3.5, PostgreSQL 16, Flyway, Docker Compose.
+Java 21, Spring Boot 4.1, PostgreSQL 16, Flyway, Docker Compose.
 
 ## Commands
 
