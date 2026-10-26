@@ -136,28 +136,31 @@ build_image() {
         return
     fi
 
+    # DEPLOY_DNS is tried first, then whatever the host seems to use. Each
+    # candidate has to prove itself from a container; a resolver that does not
+    # answer there is no better than none.
     local working=()
+    local forced=()
     local ns
-    while read -r ns; do
+    if [[ -n "${DEPLOY_DNS:-}" ]]; then
+        read -r -a forced <<< "$DEPLOY_DNS"
+    fi
+    for ns in "${forced[@]}" $(resolver_candidates); do
         [[ -n "$ns" ]] || continue
         if container_dns_works "$ns"; then
             working+=("$ns")
         fi
-    done < <(resolver_candidates)
+    done
 
     if [[ ${#working[@]} -eq 0 ]]; then
         {
-            echo "container DNS is broken and none of these resolvers answer from a container:"
+            echo "container DNS is broken and no resolver answers from a container."
+            echo "Tried DEPLOY_DNS and:"
             resolver_candidates | sed 's/^/  /'
-            echo "Give the build one with DEPLOY_DNS=\"1.1.1.1 8.8.8.8\" (it is tried first),"
-            echo "or put a working resolver in /etc/docker/daemon.json as \"dns\": [\"<address>\"]"
-            echo "and restart docker."
+            echo "Fix: DEPLOY_DNS=\"<address>\" scripts/deploy.sh"
+            echo "or add \"dns\": [\"<address>\"] to /etc/docker/daemon.json and restart docker."
         } >&2
         exit 1
-    fi
-    if [[ -n "${DEPLOY_DNS:-}" ]]; then
-        # Explicit override wins, in the order given.
-        read -r -a working <<< "$DEPLOY_DNS"
     fi
 
     ensure_builder "${working[@]}"
