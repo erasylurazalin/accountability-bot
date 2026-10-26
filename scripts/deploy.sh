@@ -44,13 +44,137 @@ SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 remote() { ssh "$DEPLOY_HOST" "$@"; }
 
+# ---------------------------------------------------------------------------
+# DNS for the build
+#
+# A build needs the network twice: Gradle pulling from Maven Central, and apk
+# pulling security updates. A build container has its own network namespace, so
+# it can only use a resolver that answers from one. That rules out the host's
+# systemd stub on 127.0.0.53, which is loopback and therefore means the
+# container itself. It also rules out 1.1.1.1 on this network, where outbound
+# DNS from a container is dropped.
+#
+# The normal path is whatever /etc/docker/daemon.json already gives containers,
+# and then this is invisible. When that is broken, the script looks for a
+# resolver that does answer from a container and builds through a dedicated
+# buildx builder that carries it, so a deploy never depends on the campus
+# network or on editing the daemon by hand.
+#
+# buildkitd runs with host networking for one specific reason: it has to pull
+# the base images itself, and in the broken case the daemon's DNS is no good to
+# it either. On the host, whatever the host resolves with works.
+# ---------------------------------------------------------------------------
+
+PROBE_IMAGE="${PROBE_IMAGE:-alpine:latest}"
+BUILDER_NAME="accountability-build"
+BUILDER_STAMP="$SRC_DIR/build/deploy-build-dns"
+
+# Resolvers to try when the daemon's own DNS does not work, best first:
+# systemd-resolved keeps the real upstreams separately from the stub it hands to
+# applications, which is exactly the list worth trying. The gateway is the last
+# resort. Loopback and IPv6 are dropped: loopback is the container itself, and
+# this build does not need v6.
+resolver_candidates() {
+    { cat /run/systemd/resolve/resolv.conf /etc/resolv.conf 2>/dev/null \
+        | awk '/^nameserver/ {print $2}'
+      ip route 2>/dev/null | awk '/^default/ {print $3; exit}'
+    } | grep -v ':' | grep -vE '^127\.' | awk '!seen[$0]++'
+}
+
+# With no arguments, asks the question that matters: can a plain container
+# resolve at all? With arguments, tests specific resolvers.
+container_dns_works() {
+    docker image inspect "$PROBE_IMAGE" >/dev/null 2>&1 \
+        || docker pull -q "$PROBE_IMAGE" >/dev/null 2>&1 \
+        || return 1
+    local args=()
+    local ns
+    for ns in "$@"; do
+        args+=(--dns "$ns")
+    done
+    docker run --rm "${args[@]}" "$PROBE_IMAGE" nslookup dl-cdn.alpinelinux.org >/dev/null 2>&1
+}
+
+# Creates or reuses the builder. The resolver list is baked into buildkitd, so
+# the builder is rebuilt only when that list changes, which keeps its layer
+# cache across deploys.
+ensure_builder() {
+    local resolvers=("$@")
+    local stamp="${resolvers[*]}"
+
+    if [[ -f "$BUILDER_STAMP" && "$(cat "$BUILDER_STAMP")" == "$stamp" ]] \
+        && docker buildx inspect "$BUILDER_NAME" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    log "preparing $BUILDER_NAME with resolvers: $stamp"
+    docker buildx rm "$BUILDER_NAME" >/dev/null 2>&1 || true
+
+    mkdir -p "$SRC_DIR/build"
+    local config="$SRC_DIR/build/deploy-buildkitd.toml"
+    {
+        echo '[dns]'
+        printf '  nameservers = [%s]\n' \
+            "$(printf '"%s", ' "${resolvers[@]}" | sed 's/, $//')"
+    } > "$config"
+
+    docker buildx create \
+        --name "$BUILDER_NAME" \
+        --driver docker-container \
+        --driver-opt network=host \
+        --config "$config" \
+        --bootstrap >/dev/null
+    echo "$stamp" > "$BUILDER_STAMP"
+}
+
+build_image() {
+    local tag="$1"
+
+    if [[ -z "${DEPLOY_FORCE_BUILDER:-}" ]] && container_dns_works; then
+        log "building $IMAGE:$tag"
+        docker build -t "$IMAGE:$tag" -t "$IMAGE:latest" "$SRC_DIR"
+        return
+    fi
+
+    local working=()
+    local ns
+    while read -r ns; do
+        [[ -n "$ns" ]] || continue
+        if container_dns_works "$ns"; then
+            working+=("$ns")
+        fi
+    done < <(resolver_candidates)
+
+    if [[ ${#working[@]} -eq 0 ]]; then
+        {
+            echo "container DNS is broken and none of these resolvers answer from a container:"
+            resolver_candidates | sed 's/^/  /'
+            echo "Give the build one with DEPLOY_DNS=\"1.1.1.1 8.8.8.8\" (it is tried first),"
+            echo "or put a working resolver in /etc/docker/daemon.json as \"dns\": [\"<address>\"]"
+            echo "and restart docker."
+        } >&2
+        exit 1
+    fi
+    if [[ -n "${DEPLOY_DNS:-}" ]]; then
+        # Explicit override wins, in the order given.
+        read -r -a working <<< "$DEPLOY_DNS"
+    fi
+
+    ensure_builder "${working[@]}"
+    log "building $IMAGE:$tag through $BUILDER_NAME (container DNS is broken)"
+    docker buildx build \
+        --builder "$BUILDER_NAME" \
+        --load \
+        -t "$IMAGE:$tag" -t "$IMAGE:latest" \
+        "$SRC_DIR"
+}
+
 log "checking $DEPLOY_HOST is reachable"
 remote true
 
 if [[ "$DO_BUILD" == 1 ]]; then
     TAG="$(date +%Y%m%d-%H%M%S)"
-    log "building $IMAGE:$TAG"
-    docker build -t "$IMAGE:$TAG" -t "$IMAGE:latest" "$SRC_DIR"
+    build_image "$TAG"
 else
     # Keep the tag that is already deployed. Compose compares the tag text, so
     # writing a different name for the same image would recreate the bot.
