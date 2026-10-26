@@ -169,6 +169,19 @@ class UiFlowTest {
     }
 
     @Test
+    void backFromTheConfirmCardReturnsToTheTimesNotTheDates() {
+        ui.tap(CHAT, Keyboards.NEW, 10L);
+        ui.text(CHAT, "half way");
+        ui.tap(CHAT, Keyboards.NEW + ":d:2026-10-02", 11L);
+        ui.tap(CHAT, Keyboards.NEW + ":t:2359", 12L);
+
+        var back = ui.tap(CHAT, Keyboards.NEW + ":b:", 13L);
+        assertThat(back.text()).contains("What time?");
+        assertThat(drafts.find(CHAT)).get().extracting(UiDraftRepository.Draft::step)
+                .isEqualTo(UiDraftRepository.Step.NEW_TIME);
+    }
+
+    @Test
     void aDeadlineInThePastIsRefusedAtTheConfirmStep() {
         ui.tap(CHAT, Keyboards.NEW, 10L);
         ui.text(CHAT, "too late");
